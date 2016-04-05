@@ -1,0 +1,51 @@
+{
+  "name": "angular2-bootstrap-starter",
+  "version": "0.44.0",
+  "description": "Angular2-bootstrap starter repo",
+  "main": "index.js",
+  "scripts": {
+    "deploy": "NODE_ENV=production webpack -p --progress --color --optimize-minimize --optimize-dedupe --optimize-occurence-order",
+    "dev": "webpack-dev-server --hot --inline --colors --display-error-details --display-cached --port 3000",
+    "start": "npm run dev",
+    "test": "gulp lint"
+  },
+  "keywords": [
+    "angular2",
+    "n2-bootstrap",
+    "angular2-bootstrap",
+    "starter",
+    "angular2-bootstrap-started"
+  ],
+  "author": "Dmitriy Shekhovtsov <valorkin@gmail.com>",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/valor-software/angular2-bootstrap-starter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/valor-software/angular2-bootstrap-starter/issues"
+  },
+  "homepage": "https://github.com/valor-software/angular2-bootstrap-starter#readme",
+  "dependencies": {
+    "angular2": "2.0.0-alpha.46",
+    "ng2-bootstrap": "0.46.0",
+    "reflect-metadata": "0.1.2",
+    "underscore": "^1.8.3",
+    "zone.js": "0.5.8"
+  },
+  "devDependencies": {
+    "babel-eslint": "4.1.3",
+    "compression-webpack-plugin": "0.2.0",
+    "eslint": "1.7.1",
+    "gulp": "3.9.0",
+    "gulp-eslint": "1.0.0",
+    "gulp-size": "2.0.0",
+    "gulp-tslint": "3.3.1",
+    "pre-commit": "1.1.1",
+    "require-dir": "0.3.0",
+    "ts-loader": "0.5.6",
+    "typescript": "1.6.2",
+    "webpack": "1.12.2",
+    "webpack-dev-server": "1.12.0"
+  }
+}

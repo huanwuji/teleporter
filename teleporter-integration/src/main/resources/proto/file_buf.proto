@@ -1,0 +1,17 @@
+package teleporter.integration.proto;
+
+message FileProto {
+    required bytes tId = 1;
+    required string filePath = 2;
+    required bool append = 3;
+    required bytes message = 4;
+    optional int32 size = 5;
+    optional int32 totalSize = 6;
+    optional int32 begin = 7;
+    optional int32 end = 8;
+    optional string checksum = 9;
+}
+
+message FileProtos {
+    repeated FileProto protos = 1;
+}
