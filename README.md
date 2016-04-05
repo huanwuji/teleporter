@@ -6,5 +6,5 @@ Used for data transfer,push,poll.
 Support kafka,jdbc,mongo.
 teleporter-web is an angular2 web managerment.
 
-##defined:
+##defined
 task -> streams -> stream{graph(source,sink,flow)}
