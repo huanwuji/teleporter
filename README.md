@@ -7,4 +7,4 @@ Support kafka,jdbc,mongo.
 teleporter-web is an angular2 web managerment.
 
 ##defined:
-task -> streams -> {graph(source,sink,flow)}
+task -> streams -> stream{graph(source,sink,flow)}
