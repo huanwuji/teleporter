@@ -28,7 +28,7 @@ object KafkaTcpTlsClientBoot extends App with LazyLogging {
   try {
     implicit val cipherSuites = defaultCipherSuites
     implicit val sslContext = initSslContext(
-      "shuyun-etl".toCharArray,
+      "test".toCharArray,
       //      getClass.getResourceAsStream("/security/keystore.jks"),
       //      getClass.getResourceAsStream("/security/truststore.jks")
       new FileInputStream("D:\\git\\etl\\teleporter\\teleporter-task-tests\\config\\security\\keystore.jks"),
