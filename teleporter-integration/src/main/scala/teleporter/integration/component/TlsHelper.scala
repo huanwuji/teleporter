@@ -4,7 +4,9 @@ import java.io.InputStream
 import java.security.{KeyStore, SecureRandom}
 import javax.net.ssl.{KeyManagerFactory, SSLContext, TrustManagerFactory}
 
-import akka.stream.io._
+import akka.stream.TLSProtocol.NegotiateNewSession
+import akka.stream.scaladsl.TLS
+import akka.stream.{Client, Server, TLSClientAuth, TLSClosing}
 
 /**
  * date 2015/8/3.
@@ -15,7 +17,7 @@ class TlsHelper
 object TlsHelper {
   def defaultCipherSuites = NegotiateNewSession
     .withCipherSuites("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_128_CBC_SHA")
-    .withClientAuth(ClientAuth.need)
+    .withClientAuth(TLSClientAuth.need)
 
   def initSslContext(password: Array[Char], keyStoreStream: InputStream, trustStoreStream: InputStream): SSLContext = {
     val keyStore = KeyStore.getInstance(KeyStore.getDefaultType)
@@ -31,7 +33,7 @@ object TlsHelper {
     context
   }
 
-  def clientTls(closing: Closing)(implicit sslContext: SSLContext, cipherSuites: NegotiateNewSession) = SslTls(sslContext, cipherSuites, Client, closing)
+  def clientTls(closing: TLSClosing)(implicit sslContext: SSLContext, cipherSuites: NegotiateNewSession) = TLS(sslContext, cipherSuites, Client, closing)
 
-  def serverTls(closing: Closing)(implicit sslContext: SSLContext, cipherSuites: NegotiateNewSession) = SslTls(sslContext, cipherSuites, Server, closing)
+  def serverTls(closing: TLSClosing)(implicit sslContext: SSLContext, cipherSuites: NegotiateNewSession) = TLS(sslContext, cipherSuites, Server, closing)
 }

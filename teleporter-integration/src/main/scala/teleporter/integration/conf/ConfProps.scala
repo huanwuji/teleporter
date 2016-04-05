@@ -2,38 +2,54 @@ package teleporter.integration.conf
 
 import java.time.LocalDateTime
 
-import teleporter.integration.DEFAULT_DATE_FORMATTER
 import teleporter.integration.conf.Conf.Props
+import teleporter.integration.utils.{CronFixed, Dates}
 
 import scala.collection.immutable.Map
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration._
 
 /**
  * Author: kui.dai
  * Date: 2015/11/26.
  */
 trait BasicConversions {
-  def asInt(v: Any): Int = v match {
-    case s: String ⇒ s.toInt
-    case i: Int ⇒ i
-    case d: Double => d.toInt
-    case bi: BigInt ⇒ bi.toInt
-    case _ ⇒ throw new IllegalArgumentException(s"No match type convert for type:${v.getClass}, value:$v")
+  def asInt(v: Any): Option[Int] = v match {
+    case s: String if s.isEmpty ⇒ None
+    case s: String ⇒ Some(s.toInt)
+    case i: Int ⇒ Some(i)
+    case d: Double => Some(d.toInt)
+    case bi: BigInt ⇒ Some(bi.toInt)
+    case _ ⇒ throw new IllegalArgumentException(s"No match int type convert for type:${v.getClass}, value:$v")
   }
 
-  def asLong(v: Any): Long = v match {
-    case s: String ⇒ s.toLong
-    case bi: BigInt ⇒ bi.toLong
-    case d: Double => d.toLong
-    case l: Long ⇒ l
-    case _ ⇒ throw new IllegalArgumentException(s"No match type convert for type:${v.getClass}, value:$v")
+  def asLong(v: Any): Option[Long] = v match {
+    case s: String if s.isEmpty ⇒ None
+    case s: String ⇒ Some(s.toLong)
+    case bi: BigInt ⇒ Some(bi.toLong)
+    case d: Double => Some(d.toLong)
+    case l: Long ⇒ Some(l)
+    case _ ⇒ throw new IllegalArgumentException(s"No match long type convert for type:${v.getClass}, value:$v")
   }
 
   def asString(v: Any): String = v.toString
 
-  def asBoolean(v: Any): Boolean = v match {
-    case s: String ⇒ s.toBoolean
-    case _ ⇒ throw new IllegalArgumentException(s"No match type convert for type:${v.getClass}, value:$v")
+  def asNonEmptyString(v: Any): Option[String] = v match {
+    case s: String if s.isEmpty ⇒ None
+    case x ⇒ Some(x.toString)
+  }
+
+  def asDuration(v: Any): Option[Duration] = v match {
+    case s: String if s.isEmpty ⇒ None
+    case s: String ⇒ Some(Duration(s))
+    case _ ⇒ throw new IllegalArgumentException(s"No match duration type convert for type:${v.getClass}, value:$v")
+  }
+
+  def asBoolean(v: Any): Option[Boolean] = v match {
+    case s: String if s.isEmpty ⇒ None
+    case s: String ⇒ Some(s.toBoolean)
+    case b: Boolean ⇒ Some(b)
+    case jb: java.lang.Boolean ⇒ Some(jb)
+    case _ ⇒ throw new IllegalArgumentException(s"No match boolean type convert for type:${v.getClass}, value:$v")
   }
 }
 
@@ -42,19 +58,29 @@ trait PropsSupport extends BasicConversions {
 
   def get[T](props: Props, key: String): T = props(key).asInstanceOf[T]
 
+  def getOrElse[T](props: Props, key: String, default: T): T = props.getOrElse(key, default).asInstanceOf[T]
+
   def getStringOpt(props: Props, key: String): Option[String] = props.get(key).map(asString)
 
   def getStringOrElse(props: Props, key: String, default: String): String = getStringOpt(props, key).getOrElse(default)
 
-  def getIntOpt(props: Props, key: String): Option[Int] = props.get(key).map(asInt)
+  def getNonEmptyStringOpt(props: Props, key: String): Option[String] = props.get(key).flatMap(asNonEmptyString)
+
+  def getNonEmptyStringOrElse(props: Props, key: String, default: String): String = getStringOpt(props, key).getOrElse(default)
+
+  def getDuration(props: Props, key: String): Option[Duration] = props.get(key).flatMap(asDuration)
+
+  def getDurationOrElse(props: Props, key: String, default: Duration): Duration = getDuration(props, key).getOrElse(default)
+
+  def getIntOpt(props: Props, key: String): Option[Int] = props.get(key).flatMap(asInt)
 
   def getIntOrElse(props: Props, key: String, default: Int): Int = getIntOpt(props, key).getOrElse(default)
 
-  def getLongOpt(props: Props, key: String): Option[Long] = props.get(key).map(asLong)
+  def getLongOpt(props: Props, key: String): Option[Long] = props.get(key).flatMap(asLong)
 
   def getLongOrElse(props: Props, key: String, default: Long): Long = getLongOpt(props, key).getOrElse(default)
 
-  def getBooleanOpt(props: Props, key: String): Option[Boolean] = props.get(key).map(asBoolean)
+  def getBooleanOpt(props: Props, key: String): Option[Boolean] = props.get(key).flatMap(asBoolean)
 
   def getBooleanOrElse(props: Props, key: String, default: Boolean): Boolean = getBooleanOpt(props, key).getOrElse(default)
 
@@ -69,12 +95,14 @@ trait PropsSupport extends BasicConversions {
   }
 }
 
+object PropsSupport extends PropsSupport
+
 trait ConfProps[T]
 
 trait PropsAdapter extends PropsSupport {
   val NS_CMP = "cmp"
   val props: Props
-  val cmpProps = get[Props](props, NS_CMP)
+  val cmpProps = getOrElse[Props](props, NS_CMP, Conf.PROPS_EMPTY)
 
   def updateProp(kv: (String, String)): Props = updateProp(Nil, kv)
 
@@ -93,69 +121,102 @@ trait PropsAdapter extends PropsSupport {
       case Nil ⇒ _props ++ kv
       case _ ⇒
         val head = path.head
-        _props + (head → traversalUpdate(path.tail, get[Props](_props, head), kv: _*))
+        _props + (head → traversalUpdate(path.tail, getOrElse[Props](_props, head, Conf.props()), kv: _*))
     }
   }
 }
 
-trait SourceProps extends PropsAdapter
+trait SourceProps extends PropsAdapter {
+  val errorRules = getNonEmptyStringOpt(cmpProps, "errorRules")
+}
 
-trait SinkProps extends PropsAdapter
+class SourcePropsImpl(override val props: Props) extends SourceProps
+
+object SourceProps extends ConfProps[SourceProps] {
+  implicit def toProps(props: Props): SourceProps = new SourcePropsImpl(props)
+}
+
+trait SinkProps extends PropsAdapter {
+  val errorRules = getNonEmptyStringOpt(cmpProps, "errorRules")
+}
+
+class SinkPropsImpl(override val props: Props) extends SinkProps
+
+object SinkProps extends ConfProps[SinkProps] {
+  implicit def toProps(props: Props): SinkProps = new SinkPropsImpl(props)
+}
 
 trait PublisherProps extends SourceProps
 
-trait SubscriberProps extends SinkProps {
-  val NS_SUBSCRIBE = "subscriber"
-  private val _subscribeProps: Props = get[Props](props,NS_SUBSCRIBE)
-
-  def highWatermark = getIntOrElse(_subscribeProps, "highWatermark", 20)
+trait CronProps extends PropsAdapter {
+  val cron = getNonEmptyStringOpt(cmpProps, "cron").map(CronFixed.fixed)
 }
 
-trait PageRollerProps extends SourceProps {
-  private val NS_PAGE_ROLLER = "pageRoller"
-  private val _pageRollerProp = get[Props](props, NS_PAGE_ROLLER)
-  val page = getIntOrElse(_pageRollerProp, "page", 1)
-  val pageSize = getIntOpt(_pageRollerProp, "pageSize")
-  val maxPage = getIntOrElse(_pageRollerProp, "maxPage", Int.MaxValue)
-  val offset = getIntOrElse(_pageRollerProp, "offset", Int.MaxValue)
+trait SubscriberProps extends SinkProps {
+  val NS_SUBSCRIBE = "subscriber"
+  private val _subscribeProps: Props = getOrElse[Props](props, NS_SUBSCRIBE, Conf.PROPS_EMPTY)
+  val highWatermark = getIntOrElse(_subscribeProps, "highWatermark", 20)
+  val parallelism = getIntOrElse(_subscribeProps, "parallelism", 1)
+}
 
-  def page(page: Int): Props = updateProps(NS_PAGE_ROLLER, "page" → page.toString, "offset" → (page * pageSize.get).toString)
+class SubscriberPropsImpl(override val props: Props) extends SubscriberProps
 
-  def pageSize(pageSize: Int): Props = updateProp(NS_PAGE_ROLLER, "pageSize" → pageSize.toString)
+object SubscriberProps extends ConfProps[SubscriberProps] {
+  implicit def toProps(props: Props): SubscriberProps = new SubscriberPropsImpl(props)
+}
 
-  def maxPage(maxPage: Int): Props = updateProp(NS_PAGE_ROLLER, "maxPage" → maxPage.toString)
+trait PageRollerProps extends PublisherProps {
+  val page = getIntOrElse(cmpProps, "page", 1)
+  val pageSize = getIntOpt(cmpProps, "pageSize")
+  val maxPage = getIntOrElse(cmpProps, "maxPage", Int.MaxValue)
+  val offset = getIntOrElse(cmpProps, "offset", 0)
+
+  def page(page: Int): Props = updateProps(NS_CMP, "page" → page.toString, "offset" → (page * pageSize.get).toString)
+
+  def pageSize(pageSize: Int): Props = updateProp(NS_CMP, "pageSize" → pageSize.toString)
+
+  def maxPage(maxPage: Int): Props = updateProp(NS_CMP, "maxPage" → maxPage.toString)
+
+  def isPageRoller = pageSize.isDefined
 }
 
 class PageRollerPropsImpl(override val props: Props) extends PageRollerProps
 
 object PageRollerProps extends ConfProps[PageRollerProps] {
-  implicit def toProps(props: Props): PageRollerProps = new PageRollerPropsImpl(props: Props)
+  implicit def toProps(props: Props): PageRollerProps = {
+    val pageRollerProps = new PageRollerPropsImpl(props: Props)
+    //make offset is consistent with pageNo
+    if (pageRollerProps.offset == (pageRollerProps.page * pageRollerProps.pageSize.get)) {
+      pageRollerProps
+    } else {
+      new PageRollerPropsImpl(pageRollerProps.page(pageRollerProps.page))
+    }
+  }
 }
 
 /**
- * deadline support:
- * now
- * fromNow
- * 1.minutes.fromNow
- * 2011-12-03T10:15:30Z
+ * deadline support: now, fromNow, 1.minutes.fromNow, 2011-12-03T10:15:30Z
  */
-trait TimeRollerProps extends SourceProps {
-  val NS_TIME_ROLLER = "timeRoller"
-  val _timerRollerPage = get[Props](props, NS_TIME_ROLLER)
-  val deadline = getStringOpt(_timerRollerPage, "deadline")
-  val start = getStringOpt(_timerRollerPage, "start")
-  val period = getStringOpt(_timerRollerPage, "period")
-  val maxPeriod = getStringOpt(_timerRollerPage, "maxPeriod")
+trait TimeRollerProps extends PublisherProps {
+  val deadline = getStringOpt(cmpProps, "deadline")
+  val start = getStringOpt(cmpProps, "start")
+  val end = getStringOpt(cmpProps, "end")
+  val period = getStringOpt(cmpProps, "period")
+  val maxPeriod = getStringOpt(cmpProps, "maxPeriod")
 
-  def deadline(deadline: String): Props = updateProp(NS_TIME_ROLLER, "deadline" → deadline)
+  def deadline(deadline: String): Props = updateProp(NS_CMP, "deadline" → deadline)
 
-  def start(start: LocalDateTime): Props = updateProp(NS_TIME_ROLLER, "start" → start.format(DEFAULT_DATE_FORMATTER))
+  def start(start: LocalDateTime): Props = updateProp(NS_CMP, "start" → start.format(Dates.DEFAULT_DATE_FORMATTER))
 
-  def end(start: LocalDateTime): Props = updateProp(NS_TIME_ROLLER, "end" → start.format(DEFAULT_DATE_FORMATTER))
+  def end(start: LocalDateTime): Props = updateProp(NS_CMP, "end" → start.format(Dates.DEFAULT_DATE_FORMATTER))
 
-  def period(period: Duration): Props = updateProp(NS_TIME_ROLLER, "period" → period.toString)
+  def period(period: Duration): Props = updateProp(NS_CMP, "period" → period.toString)
 
-  def maxPeriod(maxPeriod: Duration): Props = updateProp(NS_TIME_ROLLER, "maxPeriod" → maxPeriod.toString)
+  def maxPeriod(maxPeriod: Duration): Props = updateProp(NS_CMP, "maxPeriod" → maxPeriod.toString)
+
+  def isContinuous: Boolean = deadline.exists(_.contains("fromNow"))
+
+  def isTimerRoller = period.isDefined
 }
 
 class TimePollerPropsImpl(override val props: Props) extends TimeRollerProps
@@ -164,12 +225,31 @@ object TimePollerProps extends ConfProps[TimeRollerProps] {
   implicit def toProps(props: Props): TimeRollerProps = new TimePollerPropsImpl(props)
 }
 
+trait RollerProps extends PageRollerProps with TimeRollerProps
+
+class RollerPropsImpl(override val props: Props) extends RollerProps
+
+object RollerProps extends ConfProps[RollerProps] {
+  implicit def toProps(props: Props): RollerProps = new RollerPropsImpl(props)
+}
+
+trait ScheduleProps extends CronProps with RollerProps
+
+class SchedulePropsImpl(override val props: Props) extends ScheduleProps
+
+object ScheduleProps extends ConfProps[ScheduleProps] {
+  implicit def toProps(props: Props): ScheduleProps = new SchedulePropsImpl(props)
+}
+
 trait TransactionProps extends SourceProps {
   val NS_TRANSACTION = "transaction"
-  val _transaction = get[Props](props, NS_TRANSACTION)
+  val _transaction = getOrElse[Props](props, NS_TRANSACTION, Conf.PROPS_EMPTY)
+  val recoveryPointEnabled = getBooleanOrElse(props, "recoveryPointEnabled", default = true)
   val channelSize = getIntOrElse(_transaction, "channelSize", 1)
-  val batchSize = getIntOrElse(_transaction, "batchSize", 500)
-  val maxAge = Duration(getStringOrElse(_transaction, "maxAge", "1.minutes"))
+  val batchSize = getIntOrElse(_transaction, "batchSize", 10000)
+  val commitDelay: Option[Duration] = getDuration(_transaction, "commitDelay")
+  val maxAge = getDurationOrElse(_transaction, "maxAge", 2.minutes)
+  val timeoutRetry = getBooleanOrElse(_transaction, "timeoutRetry", default = true)
   val maxCacheSize = getIntOrElse(_transaction, "maxCacheSize", 100000)
 }
 
@@ -179,39 +259,58 @@ object TransactionProps extends ConfProps[TransactionProps] {
   implicit def toProps(props: Props): TransactionProps = new TransactionPropsImpl(props)
 }
 
-trait KafkaPublisherProps extends PublisherProps {
-  val topic = getStringOpt(cmpProps, "topic").get
-}
-
-trait KafkaSubscriberProps extends SubscriberProps
-
 trait DataSourceSourceProps extends PageRollerProps with TimeRollerProps with TransactionProps with PublisherProps {
   def sql = getStringOpt(cmpProps, "sql").get
 }
 
-trait DataSourceSinkProps extends SubscriberProps
-
 class DataSourceSourcePropsConversionsImpl(override val props: Props) extends DataSourceSourceProps
-
-class DataSourceSinkPropsConversionsImpl(override val props: Props) extends DataSourceSinkProps
 
 object DataSourceSourcePropsConversions extends ConfProps[DataSourceSourceProps] {
   implicit def toProps(props: Props): DataSourceSourceProps = new DataSourceSourcePropsConversionsImpl(props)
 }
 
+trait DataSourceSinkProps extends SubscriberProps
+
+class DataSourceSinkPropsConversionsImpl(override val props: Props) extends DataSourceSinkProps
+
 object DataSourceSinkPropsConversions extends ConfProps[DataSourceSinkProps] {
   implicit def toProps(props: Props): DataSourceSinkProps = new DataSourceSinkPropsConversionsImpl(props)
 }
 
-class KafkaPublisherPropsImpl(override val props: Props) extends KafkaPublisherProps
+trait KafkaPublisherProps extends PublisherProps {
+  val topics = getStringOpt(cmpProps, "topics")
+}
 
-class KafkaSubscriberPropsImpl(override val props: Props) extends KafkaSubscriberProps
+class KafkaPublisherPropsImpl(override val props: Props) extends KafkaPublisherProps
 
 object KafkaPublisherPropsConversions extends ConfProps[KafkaPublisherProps] {
   implicit def toProps(props: Props): KafkaPublisherProps = new KafkaPublisherPropsImpl(props)
 }
 
+trait KafkaSubscriberProps extends SubscriberProps
+
+class KafkaSubscriberPropsImpl(override val props: Props) extends KafkaSubscriberProps
+
 object KafkaSubscriberPropsConversions extends ConfProps[KafkaSubscriberProps] {
   implicit def toProps(props: Props): KafkaSubscriberProps = new KafkaSubscriberPropsImpl(props)
 }
 
+trait MongoSourceProps extends PageRollerProps with TimeRollerProps with TransactionProps with PublisherProps {
+  val database = getStringOpt(cmpProps, "database").get
+  val collection = getStringOpt(cmpProps, "collection").get
+  val query = getStringOpt(cmpProps, "query")
+}
+
+class MongoSourcePropsImpl(override val props: Props) extends MongoSourceProps
+
+object MongoSourcePropsConversions extends ConfProps[MongoSourceProps] {
+  implicit def toProps(props: Props): MongoSourceProps = new MongoSourcePropsImpl(props)
+}
+
+trait StreamProps extends PropsAdapter
+
+class StreamPropsImpl(override val props: Props) extends StreamProps
+
+object StreamPropsConversions extends ConfProps[StreamProps] {
+  implicit def toProps(props: Props): StreamProps = new StreamPropsImpl(props)
+}

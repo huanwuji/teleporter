@@ -3,8 +3,9 @@ package teleporter.integration.core
 import java.time.LocalDateTime
 
 import org.scalatest.FunSuite
-import teleporter.integration._
+import teleporter.integration.component.Rollers
 import teleporter.integration.conf.DataSourceSourcePropsConversions
+import teleporter.integration.utils.Dates
 
 import scala.concurrent.duration.Duration
 
@@ -86,7 +87,7 @@ class RollersTest extends FunSuite {
   test("RollerTime fixed time") {
     import DataSourceSourcePropsConversions._
     val period = Duration("10s")
-    val deadline = DEFAULT_DATE_FORMATTER.format(LocalDateTime.now())
+    val deadline = Dates.DEFAULT_DATE_FORMATTER.format(LocalDateTime.now())
     println(deadline)
     val props = Map[String,Any]().start(LocalDateTime.now().minusMinutes(2)).deadline(deadline).period(period)
     val roller = Rollers(props, {

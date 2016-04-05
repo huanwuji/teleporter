@@ -8,7 +8,7 @@ import org.scalatest.FunSuite
  */
 class RequestStrategy$Test extends FunSuite {
   test("requestStrategy") {
-    val strategy = RequestStrategy("watermark(100,6)")
+    val strategy = RequestStrategyManager("watermark(100,6)")
     println(strategy)
   }
 }

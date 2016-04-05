@@ -18,7 +18,7 @@ trait MsgParser[T] {
 }
 
 
-case class KafkaMessageTmp(headers: Map[String, Any], payload: Map[String, Any])
+case class MessageTmp(headers: Map[String, Any], payload: Map[String, Any])
 
 
 object KafkaMsgParser extends MsgParser[KafkaMessage]() {
@@ -28,21 +28,20 @@ object KafkaMsgParser extends MsgParser[KafkaMessage]() {
   mapper.disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
   mapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
 
-  override def parser(msg: KafkaMessage): KafkaMessageTmp = {
+  override def parser(msg: KafkaMessage): MessageTmp = {
     val message: String = ByteString(msg.toString).utf8String
     val headers = mapper.readValue[Map[String,Any]](message).get("headers").get.toString
     val headerMap = mapper.readValue[Map[String,Any]](headers)
     val payload = mapper.readValue[Map[String,Any]](message).get("payload").get.toString
     val msgMap = mapper.readValue[Map[String,Any]](payload)
-    new KafkaMessageTmp(headerMap, msgMap)
+    new MessageTmp(headerMap, msgMap)
   }
 }
 
 
 object MsgParser {
 
-  implicit def parse(msg: KafkaMessage): KafkaMessageTmp = KafkaMsgParser.parser(msg)
-
+  implicit def parse(msg: KafkaMessage): MessageTmp = KafkaMsgParser.parser(msg)
 
 }
 

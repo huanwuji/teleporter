@@ -5,11 +5,7 @@ message FileProto {
     required string filePath = 2;
     required bool append = 3;
     required bytes message = 4;
-    optional int32 size = 5;
-    optional int32 totalSize = 6;
-    optional int32 begin = 7;
-    optional int32 end = 8;
-    optional string checksum = 9;
+    required int64 position=5;
 }
 
 message FileProtos {

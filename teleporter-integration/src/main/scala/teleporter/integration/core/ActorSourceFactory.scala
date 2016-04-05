@@ -1,54 +1,65 @@
 package teleporter.integration.core
 
-import akka.actor.{ActorSystem, Props}
+import akka.actor.Props
 import akka.stream.actor.ActorPublisher
 import com.typesafe.scalalogging.LazyLogging
-import org.reactivestreams.{Publisher, Subscriber}
+import org.reactivestreams.Publisher
+import teleporter.integration.CmpType
+import teleporter.integration.component.file.FilePublisher
 import teleporter.integration.component.jdbc.JdbcPublisher
-import teleporter.integration.component.{ForwardProducer, KafkaPublisher}
+import teleporter.integration.component.mongo.MongoPublisher
+import teleporter.integration.component.{KafkaPublisher, ShadowPublisher}
 import teleporter.integration.conf.Conf
+import teleporter.integration.conf.Conf.Source
 import teleporter.integration.core.conf.TeleporterConfigFactory
 
 /**
  * date 2015/8/3.
+ *
  * @author daikui
  */
 trait ActorSourceFactory extends LazyLogging {
-  implicit val teleporterCenter: TeleporterCenter
-  implicit val system: ActorSystem
   var types = Map[String, Class[_]](
     "kafka" → classOf[KafkaPublisher],
-    "forward" → classOf[ForwardProducer],
-    "dataSource" → classOf[JdbcPublisher]
+    "dataSource" → classOf[JdbcPublisher],
+    "mongo" → classOf[MongoPublisher],
+    "file"→ classOf[FilePublisher]
   )
 
   def loadConf(id: Int): Conf.Source
 
-  def build[T](id: Int): Publisher[T] = {
+  def build[T](id: Int)(implicit center: TeleporterCenter): Publisher[T] = {
     build[T](id, loadConf(id))
   }
 
-  def build[T](id: Int, conf: Conf.Source): Publisher[T] = {
+  def build[T](id: Int, conf: Conf.Source)(implicit center: TeleporterCenter): Publisher[T] = {
     logger.info(s"Init source, id:$id, conf:$conf")
-    val actorRef = system.actorOf(Props(types(conf.category), id, teleporterCenter), id.toString)
-    teleporterCenter.actorAddresses.register(id, actorRef)
-    ActorPublisher[T](actorRef)
+    val system = center.system
+    conf.category.split(":") match {
+      case Array("shadow", cat) ⇒
+        if (!center.actorAddresses.exists(id, CmpType.Source)) {
+          val actorRef = system.actorOf(Props(types(cat), id, center), id.toString)
+          center.actorAddresses.register(id, actorRef, CmpType.Source)
+        }
+        val shadowRef = system.actorOf(Props(classOf[ShadowPublisher], id, center), s"$id-shadow")
+        center.actorAddresses.register(id, shadowRef, CmpType.Shadow)
+        ActorPublisher[T](shadowRef)
+      case _ ⇒
+        val actorRef = system.actorOf(Props(types(conf.category), id, center), id.toString)
+        center.actorAddresses.register(id, actorRef, CmpType.Source)
+        ActorPublisher[T](actorRef)
+    }
   }
 
-  def registerType[T, A <: Subscriber[T]](sourceName: String, clazz: Class[A]): Unit = {
-    types = types + (sourceName → clazz)
+  def registerType[A <: ActorPublisher[_]](category: String)(implicit manifest: Manifest[A]): Unit = {
+    types = types + (category → manifest.runtimeClass)
   }
 }
 
+class ActorSourceFactoryImpl(configFactory: TeleporterConfigFactory) extends ActorSourceFactory {
+  override def loadConf(id: Int): Source = configFactory.source(id)
+}
+
 object ActorSourceFactory {
-  def apply(teleporterConfigFactory: TeleporterConfigFactory)
-           (implicit _teleporterCenter: TeleporterCenter, _system: ActorSystem): ActorSourceFactory = {
-    new ActorSourceFactory {
-      override implicit val teleporterCenter: TeleporterCenter = _teleporterCenter
-
-      override implicit val system: ActorSystem = _system
-
-      override def loadConf(id: Int): Conf.Source = teleporterConfigFactory.source(id)
-    }
-  }
+  def apply(configFactory: TeleporterConfigFactory) = new ActorSourceFactoryImpl(configFactory)
 }

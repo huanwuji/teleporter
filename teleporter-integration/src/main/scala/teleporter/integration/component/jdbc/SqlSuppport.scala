@@ -6,6 +6,7 @@ import javax.sql.DataSource
 
 import com.google.common.cache.{CacheBuilder, CacheLoader}
 import org.apache.commons.dbutils.DbUtils
+import teleporter.integration.script.Template
 import teleporter.integration.utils.Use
 
 /**
@@ -20,7 +21,9 @@ case class Update(sql: Sql) extends Action
 
 sealed trait Sql
 
-case class NameSql(sql: String, binds: Map[String, Any]) extends Sql
+case class NameSql(sql: String, binds: Map[String, Any]) extends Sql {
+  def toPreparedSql: PreparedSql = PreparedSql(this)
+}
 
 case class PreparedSql(sql: String, params: Seq[Any]) extends Sql
 
@@ -28,8 +31,6 @@ object PreparedSql {
   val paramRegex = "#\\{.+?\\}".r
   val paramGroupRegex = "#\\{(.+?)\\}".r
 
-  val expressionParamRegex = "\\{.+?\\}".r
-  val expressionParamGroupRegex = "\\{(.+?)\\}".r
 
   case class PredefinedSql(sql: String, paramNames: Seq[String])
 
@@ -48,16 +49,15 @@ object PreparedSql {
   def apply(nameSql: NameSql): PreparedSql = {
     val predefinedSql = preparedSqlCache.get(nameSql.sql)
     val params = predefinedSql.paramNames.map(nameSql.binds(_))
-    val sql = expressionParamGroupRegex.replaceAllIn(predefinedSql.sql, mh ⇒ {
-      nameSql.binds(mh.group(1)).toString
-    })
+    val sql = Template(predefinedSql.sql, nameSql.binds)
     PreparedSql(sql, params)
   }
 }
 
-case class SqlResult[T](conn: Connection, ps: Statement, rs: ResultSet, result: T) {
+case class SqlResult[T](conn: Connection, ps: Statement, rs: ResultSet, releaseHook: () ⇒ Unit, result: T) {
   def close(): Unit = {
     DbUtils.closeQuietly(conn, ps, rs)
+    releaseHook()
   }
 }
 
@@ -88,9 +88,15 @@ trait SqlSupport extends Use {
     NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $id=${paramsDefined(id)}""", data)
   }
 
-  def updateIgnore(tableName: String, id: String, data: Map[String, Any]): Update = {
-    val keys = data.keys
-    Update(NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $id=${paramsDefined(id)}""", data))
+  def update(tableName: String, id: String, version: String, data: Map[String, Any]): Sql = {
+    val keys = data.keys.filter(_ == id)
+    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $id=${paramsDefined(id)} and $version>${paramsDefined(version)}""", data)
+  }
+
+  def update(tableName: String, ids: Seq[String], version: String, data: Map[String, Any]): Sql = {
+    val keys = data.keySet -- ids
+    val keysFilter = ids.map(id ⇒ s"$id=${paramsDefined(id)}").mkString(" and ")
+    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $keysFilter and $version<${paramsDefined(version)}""", data)
   }
 
   def update(conn: Connection, sql: Sql): Int =
@@ -127,11 +133,11 @@ trait SqlSupport extends Use {
     }.result()
   }
 
-  def bulkQueryToMap(conn: Connection, preparedSql: PreparedSql): SqlResult[Iterator[Map[String, Any]]] = {
-    bulkQuery(conn, preparedSql)(toMap)
+  def bulkQueryToMap(conn: Connection, preparedSql: PreparedSql, releaseHook: () ⇒ Unit): SqlResult[Iterator[Map[String, Any]]] = {
+    bulkQuery(conn, preparedSql, releaseHook)(toMap)
   }
 
-  def bulkQuery[T](conn: Connection, preparedSql: PreparedSql)(mapper: ResultSet ⇒ T): SqlResult[Iterator[T]] = {
+  def bulkQuery[T](conn: Connection, preparedSql: PreparedSql, releaseHook: () ⇒ Unit)(mapper: ResultSet ⇒ T): SqlResult[Iterator[T]] = {
     var ps: PreparedStatement = null
     var rs: ResultSet = null
     try {
@@ -148,6 +154,7 @@ trait SqlSupport extends Use {
         conn = conn,
         ps = ps,
         rs = rs,
+        releaseHook = releaseHook,
         result = new Iterator[T] {
           var isTakeOut = true
           var _next = false
@@ -155,7 +162,7 @@ trait SqlSupport extends Use {
           if(isTakeOut) {
             _next = rs.next()
             isTakeOut = false
-            if (!_next) DbUtils.closeQuietly(conn, ps, rs)
+            if (!_next) DbUtils.closeQuietly(conn, ps, rs);releaseHook()
             _next
           } else {
             _next
@@ -169,9 +176,12 @@ trait SqlSupport extends Use {
       case e: Exception ⇒
         logger.error(e.getLocalizedMessage, e)
         DbUtils.closeQuietly(conn, ps, rs)
-        throw new RuntimeException("Init bulk query failed")
+        releaseHook()
+        throw e
     }
   }
+
+  def one(conn: Connection, preparedSql: PreparedSql): Option[Map[String, Any]] = queryToMap(conn, preparedSql).headOption
 
   def queryToMap(conn: Connection, preparedSql: PreparedSql): Iterable[Map[String, Any]] = {
     query(conn, preparedSql)(toMap)
@@ -200,3 +210,5 @@ trait SqlSupport extends Use {
     }
   }
 }
+
+object SqlSupport extends SqlSupport

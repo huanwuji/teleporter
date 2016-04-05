@@ -1,10 +1,13 @@
 package teleporter.task.tests
 
 import akka.actor.ActorSystem
+import akka.stream.scaladsl.Source
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
 import com.typesafe.scalalogging.LazyLogging
-import teleporter.integration.component.TeleporterJdbcMessage
-import teleporter.integration.core.TeleporterCenter
+import teleporter.integration.component.{KafkaRecord, TeleporterJdbcMessage, TeleporterKafkaRecord}
+import teleporter.integration.conf.PropsSupport
+import teleporter.integration.core.StreamManager.StreamInvoke
+import teleporter.integration.core.{StreamManager, TeleporterCenter}
 
 /**
  * date 2015/8/3.
@@ -19,18 +22,31 @@ object MysqlToKafka extends App with LazyLogging {
 
   import system.dispatcher
 
-  val center = TeleporterCenter()
-  center.source[TeleporterJdbcMessage]("sh:154:mysql:etl:Wechat_User_Info").map {
-    msg ⇒
-      //      println(msg.data)
-      msg.data
-    //      val dbData = msg.data
-    //      val kafkaRecord = new KafkaRecord("mysql", dbData("id").toString.getBytes, dbData.toString().getBytes)
-    //      new TeleporterKafkaRecord(
-    //        id = msg.id,
-    //        data = kafkaRecord
-    //      )
+  implicit val center = TeleporterCenter()
+  val task = center.task("multi:db:sync")
+  center.streamManager(task.id, StreamManager(task.id))
+
+//  center.source[TeleporterJdbcMessage]("sh:154:mysql:etl:Wechat_User_Info").map {
+//    msg ⇒
+//            println(msg.data)
+//      msg.data
+//          val dbData = msg.data
+//          val kafkaRecord = new KafkaRecord("mysql", dbData("id").toString.getBytes, dbData.toString().getBytes)
+//          new TeleporterKafkaRecord(
+//            id = msg.id,
+//            data = kafkaRecord
+//          )
+//  }
+////    .runForeach(println)
+//      .to(center.sink("kafka_test_sink")).run()
+}
+
+class StreamImpl {
+  val streamDef: StreamInvoke = (stream, center) ⇒ {
+    import PropsSupport._
+    import center.materializer
+    val props = stream.props
+    center.source[TeleporterJdbcMessage](getStringOpt(props,"source").get).runForeach(println)
   }
-//    .runForeach(println)
-      .to(center.sink("kafka_test_sink")).run()
+  streamDef
 }

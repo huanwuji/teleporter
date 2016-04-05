@@ -2,7 +2,7 @@ package teleporter.integration.core
 
 import java.nio.ByteBuffer
 
-import akka.actor.ActorRef
+import akka.actor.{Actor, ActorRef}
 
 /**
  * date 2015/8/3.
@@ -38,7 +38,7 @@ object TId {
   }
 }
 
-case class TeleporterMessage[A](id: TId = TId.empty,
-                                sourceRef: ActorRef = null,
-                                data: A,
-                                toNext: TeleporterMessage[A] ⇒ Unit = { msg: TeleporterMessage[A] ⇒ if (msg.sourceRef != null) msg.sourceRef ! msg.id })
+case class TeleporterMessage[A <: Any](id: TId = TId.empty,
+                                       sourceRef: ActorRef = Actor.noSender,
+                                       data: A,
+                                       toNext: TeleporterMessage[A] ⇒ Unit = { msg: TeleporterMessage[A] ⇒ if (msg.sourceRef != null) msg.sourceRef ! msg.id })

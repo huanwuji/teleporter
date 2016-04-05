@@ -2,9 +2,8 @@ package teleporter.integration.transaction
 
 import akka.actor.ActorRef
 import com.typesafe.scalalogging.LazyLogging
-import teleporter.integration.conf.Conf.Source
-import teleporter.integration.conf.TransactionProps
-import teleporter.integration.core.{TId, TeleporterMessage}
+import teleporter.integration.conf.{Conf, TransactionProps}
+import teleporter.integration.core.{TId, TeleporterCenter, TeleporterMessage}
 
 import scala.collection.mutable
 import scala.concurrent.duration.{Duration, _}
@@ -13,30 +12,27 @@ import scala.concurrent.duration.{Duration, _}
  * author: huanwuji
  * created: 2015/9/4.
  */
-case class BatchInfo[B](var batchCoordinates: Seq[B], var count: Int)
+case class BatchInfo[B](var batchCoordinates: Seq[B], var count: Int, createdTime: Long = System.currentTimeMillis(), var completedTime: Long = 0) {
+  def isComplete = completedTime != 0
+}
 
 private[transaction] case class TransactionRecord[T, V](record: TeleporterMessage[T], batchCoordinate: V, var channel: Int, expired: Long) {
   def isExpired: Boolean = System.currentTimeMillis() - expired > 0
 }
 
-case class TransactionConf(channelAll: Int = 1, batchSize: Int = 50,
-                           maxAge: Duration = 1.minutes, maxCacheSize: Int = 100000)
+case class TransactionConf(channelAll: Int = 1, batchSize: Int = 50, commitDelay: Option[Duration],
+                           maxAge: Duration = 1.minutes, maxCacheSize: Int = 100000, recoveryPointEnabled: Boolean = true, timeoutRetry: Boolean = true)
 
 object TransactionConf {
-
-  import TransactionProps._
-
-  def apply(conf: Source): TransactionConf = {
-    val props = conf.props
-    val channelSize = props.channelSize
-    val batchSize = props.batchSize
-    val maxAge = props.maxAge
-    val maxCacheSize = props.maxCacheSize
+  def apply(props: TransactionProps): TransactionConf = {
     TransactionConf(
-      channelAll = Int.MaxValue >>> (31 - channelSize),
-      batchSize = batchSize,
-      maxAge = maxAge,
-      maxCacheSize = maxCacheSize
+      channelAll = Int.MaxValue >>> (31 - props.channelSize),
+      batchSize = props.batchSize,
+      commitDelay = props.commitDelay,
+      maxAge = props.maxAge,
+      maxCacheSize = props.maxCacheSize,
+      recoveryPointEnabled = props.recoveryPointEnabled,
+      timeoutRetry = props.timeoutRetry
     )
   }
 }
@@ -48,7 +44,7 @@ trait Transaction[T, V] extends AutoCloseable {
 
   def end(id: TId)
 
-  def recovery(): Iterator[TeleporterMessage[T]]
+  def recovery: Iterator[TeleporterMessage[T]]
 
   def timeOutCheck(): Unit
 
@@ -74,15 +70,20 @@ trait BatchCommitTransaction[T, V] extends Transaction[T, V] with LazyLogging {
     val tId = TId(id, seqNr, 1)
     val msg = TeleporterMessage(tId, actorRef, data)
     batchCollect(seqNr, batchCoordinate)
-    val record = TransactionRecord(record = msg, batchCoordinate = batchCoordinate, channel = 1, expired = System.currentTimeMillis() + transactionConf.maxAge.toMillis)
+    val record = TransactionRecord(record = msg, batchCoordinate = batchCoordinate, channel = 1, expired = expiredTime)
     transactionCache +=(seqNr, record)
     handler(msg)
     seqNr += 1
     if (lastCheck + transactionConf.maxAge.toMillis < System.currentTimeMillis()) {
       timeOutCheck()
       lastCheck = System.currentTimeMillis()
+      //When data is too little, will always can't commit,so try to commit by date, ex:api,database sync etc
+      val minRecord = transactionCache.minBy(_._1)._2
+      doCommit(BatchInfo(Seq(minRecord.batchCoordinate), 1))
     }
   }
+
+  private def expiredTime() = System.currentTimeMillis() + transactionConf.maxAge.toMillis
 
   protected def batchCollect(seqNr: Long, batchCoordinate: V): Unit = {
     if (seqNr % transactionConf.batchSize == 0) {
@@ -90,7 +91,7 @@ trait BatchCommitTransaction[T, V] extends Transaction[T, V] with LazyLogging {
     }
   }
 
-  private def transStatus = s"$id transactionCache size:${transactionCache.size}, batch group size:${batchGrouped.size}, recovery size:${recoveryCache.size}, curr seqNr:$seqNr"
+  private def transStatus = s"$id transactionCache size:${transactionCache.size}, batch group size:${batchGrouped.size}, recovery size:${recoveryCache.hasNext}, curr seqNr:$seqNr"
 
   override def end(tId: TId): Unit = {
     val seqNr = tId.seqNr
@@ -107,34 +108,50 @@ trait BatchCommitTransaction[T, V] extends Transaction[T, V] with LazyLogging {
           transactionCache -= seqNr
           val batchNum = seqNr / transactionConf.batchSize
           val batchInfo = batchGrouped(batchNum)
-          if (batchInfo.count == transactionConf.batchSize - 1) {
+          batchInfo.count += 1
+          if (batchInfo.count == transactionConf.batchSize) {
+            batchInfo.completedTime = System.currentTimeMillis()
             doCommit(batchInfo)
-            batchGrouped -= batchNum
-          } else {
-            batchInfo.count += 1
           }
         } else {
           record.channel = mergeChannelId
         }
-      case false ⇒ logger.warn(s"This tId:$id not exists")
+      case false ⇒ logger.debug(s"This tId:$tId not exists")
     }
   }
 
-  override def recovery(): Iterator[TeleporterMessage[T]] = recoveryCache
+  override def recovery: Iterator[TeleporterMessage[T]] = recoveryCache
 
   def timeOutCheck(): Unit = {
     logger.info(transStatus)
-    if (!recoveryCache.hasNext) {
-      recoveryCache = transactionCache.values.filter(_.isExpired).map(_.record).toIterator
-      if (recoveryCache.nonEmpty) {
-        logger.warn(s"$id timeout message size:${recoveryCache.size}")
+    if (transactionConf.timeoutRetry && !recoveryCache.hasNext) {
+      val timeoutRecords = transactionCache.filter(_._2.isExpired)
+      if (timeoutRecords.nonEmpty) {
+        logger.warn(s"$id timeout message size:${timeoutRecords.size}")
+        recoveryCache = timeoutRecords.map {
+          case e@(k, v) ⇒ transactionCache.update(k, v.copy(expired = expiredTime())); v.record
+        }.toIterator
       }
     }
   }
 
   override def doCommit(point: BatchInfo[V]): Unit = {
-    recoveryPoint.save(id, point)
+    val commitDelay = None
+    val min = batchGrouped.minBy(_._1)._1
+    var curr = min
+    var lastCommitKey: Option[Long] = None
+    while (canCommit(batchGrouped.get(curr), commitDelay)) {
+      lastCommitKey = Some(curr)
+      curr += 1L
+    }
+    lastCommitKey.foreach(x ⇒ {
+      recoveryPoint.save(id, batchGrouped(x))
+      batchGrouped --= (min to x)
+    })
   }
+
+  private def canCommit(batchInfoOpt: Option[BatchInfo[V]], commitDelay: Option[Duration]): Boolean =
+    batchInfoOpt.exists(batchInfo ⇒ batchInfo.isComplete && (commitDelay.isEmpty || commitDelay.exists(d ⇒ System.currentTimeMillis() - batchInfo.completedTime > d.toMillis)))
 
   override def isComplete: Boolean = {
     timeOutCheck()
@@ -142,4 +159,14 @@ trait BatchCommitTransaction[T, V] extends Transaction[T, V] with LazyLogging {
   }
 
   override def complete(): Unit = recoveryPoint.complete(id)
+}
+
+trait DefaultBatchCommitTransaction[T] extends BatchCommitTransaction[T, Conf.Source] {
+  implicit val center: TeleporterCenter
+
+  def loadConf: Conf.Source = center.sourceFactory.loadConf(id)
+
+  protected var currConf = loadConf
+  override val transactionConf: TransactionConf = TransactionConf(currConf.props)
+  override implicit val recoveryPoint: RecoveryPoint[Conf.Source] = center.recoveryPoint(transactionConf)
 }

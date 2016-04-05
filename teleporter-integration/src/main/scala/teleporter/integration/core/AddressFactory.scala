@@ -1,20 +1,24 @@
 package teleporter.integration.core
 
-import akka.actor.ActorSystem
 import com.typesafe.scalalogging.LazyLogging
 import org.apache.commons.lang3.reflect.ConstructorUtils
+import teleporter.integration.CmpType
+import teleporter.integration.component._
 import teleporter.integration.component.hbase.HbaseAddressBuilder
 import teleporter.integration.component.jdbc.DataSourceAddressBuilder
-import teleporter.integration.component.{ElasticSearchAddressBuilder, KafkaConsumerAddressBuilder, KafkaProducerAddressBuilder}
+import teleporter.integration.component.mongo.MongoAddressBuilder
 import teleporter.integration.conf.Conf
 import teleporter.integration.core.conf.TeleporterConfigFactory
+
+import scala.collection.concurrent.TrieMap
+import scala.collection.mutable
 
 /**
  * date 2015/8/3.
  * @author daikui
  */
 trait AddressBuilder[A] {
-  def teleporterCenter: TeleporterCenter
+  def center: TeleporterCenter
 
   def conf: Conf.Address
 
@@ -22,79 +26,105 @@ trait AddressBuilder[A] {
 }
 
 trait Address[A] {
-  val _conf: Conf.Address
+  val conf: Conf.Address
   val client: A
 
   def close(): Unit = {}
 }
 
+class AutoCloseAddress[A <: AutoCloseable](val conf: Conf.Address, val client: A) extends Address[A] {
+  override def close(): Unit = client.close()
+}
+
+case class AddressRef(cmpType: CmpType, id: Int)
+
+object AddressRef {
+  def apply(ref: Any): AddressRef = {
+    ref match {
+      case source: Conf.Source ⇒ AddressRef(CmpType.Source, source.id)
+      case sink: Conf.Sink ⇒ AddressRef(CmpType.Sink, sink.id)
+      case _ ⇒ AddressRef(CmpType.Undefined, -1)
+    }
+  }
+}
+
 trait AddressFactory extends LazyLogging {
-  implicit val teleporterCenter: TeleporterCenter
   var types = Map[String, Class[_]](
     "kafka_consumer" → classOf[KafkaConsumerAddressBuilder],
     "kafka_producer" → classOf[KafkaProducerAddressBuilder],
     "dataSource" → classOf[DataSourceAddressBuilder],
-    "hbase.common"->classOf[HbaseAddressBuilder],
-    "elasticsearch" -> classOf[ElasticSearchAddressBuilder]
+    "hbase.common"→classOf[HbaseAddressBuilder],
+    "elasticsearch" → classOf[ElasticSearchAddressBuilder],
+    "mongo" → classOf[MongoAddressBuilder],
+    "influxdb" → classOf[InfluxdbAddressBuilder]
   )
-  var addresses = Map[Int, Address[_]]()
-  var addressesBySource = Map[Int, Address[_]]()
+  val addresses = TrieMap[Int, Address[_]]()
+  val addressesBySource = TrieMap[Int, Address[_]]()
+  val addressesRefs = new TrieMap[Int, mutable.Set[AddressRef]]
 
   def loadConf(id: Int): Conf.Address
 
-  def addressing[T](sourceConf: Conf.Source): Option[T] = {
-    val conf = loadConf(sourceConf.addressId.get)
-    val addressOpt = addressesBySource.get(sourceConf.id)
-    if (addressOpt.isEmpty) {
-      val address = build(conf).asInstanceOf[Address[T]]
-      addressesBySource = addressesBySource + (sourceConf.id → address)
-      Some(address.client)
-    } else {
-      addressOpt.asInstanceOf[Option[Address[T]]].map(_.client)
+  def addressing[T](sourceConf: Conf.Source)(implicit center: TeleporterCenter): T = {
+    addressesBySource.get(sourceConf.id).asInstanceOf[Option[Address[T]]] match {
+      case Some(address) ⇒ address.client
+      case None ⇒
+        val address = build(loadConf(sourceConf.addressId.get)).asInstanceOf[Address[T]]
+        addressesBySource += (sourceConf.id → address)
+        address.client
     }
   }
 
-  def addressing[T](id: Int): Option[T] = {
-    val conf = loadConf(id)
-    val addressOpt = addresses.get(id)
-    if (addressOpt.isEmpty) {
-      val address = build(conf).asInstanceOf[Address[T]]
-      addresses = addresses + (id → address)
-      Some(address.client)
-    } else {
-      addressOpt.asInstanceOf[Option[Address[T]]].map(_.client)
+  /**
+   * client will close where ref is empty
+   */
+  def addressing[T](id: Int, ref: Any)(implicit center: TeleporterCenter): T = getAddress[T](loadConf(id), ref).client
+
+  private def getAddress[T](conf: Conf.Address, ref: Any)(implicit center: TeleporterCenter): Address[T] = {
+    val id = conf.id
+    addresses.get(id).asInstanceOf[Option[Address[T]]] match {
+      case Some(address) ⇒ address
+      case None ⇒
+        val address = build(conf).asInstanceOf[Address[T]]
+        this.synchronized {
+          addressesRefs.getOrElseUpdate(id, mutable.Set[AddressRef]()) += AddressRef(ref)
+        }
+        addresses += (id → address)
+        address
     }
   }
 
-  private def build[T](conf: Conf.Address): Address[T] = {
+  private def build[T](conf: Conf.Address)(implicit center: TeleporterCenter): Address[T] = {
     val clazz = types(conf.category)
-    val address = ConstructorUtils.invokeConstructor(clazz, conf, teleporterCenter)
+    val address = ConstructorUtils.invokeConstructor(clazz, conf, center)
     address.asInstanceOf[AddressBuilder[T]].build
   }
 
-  def registerType[T <: Address[Any]](addressName: String, clazz: Class[T]): Unit = {
-    types = types + (addressName → clazz)
+  def registerType[T <: Address[Any]](category: String, clazz: Class[T]): Unit = {
+    types = types + (category → clazz)
   }
 
   def close(conf: Conf.Source): Unit = {
     val sourceId = conf.id
-    addressesBySource(sourceId).close()
-    addressesBySource = addressesBySource - sourceId
+    conf.addressId.foreach(x ⇒ addresses.remove(x).foreach(_.close()))
+    addressesBySource -= sourceId
   }
 
-  def close(id: Int): Unit = {
-    addresses(id).close()
-    addresses = addresses - id
+  def close(id: Int, ref: Any): Unit = {
+    this.synchronized {
+      addressesRefs.get(id).foreach {
+        refs ⇒ if ((refs -= AddressRef(ref)).isEmpty) {
+          addressesRefs -= id
+          addresses.remove(id).foreach(_.close())
+        }
+      }
+    }
   }
 }
 
+class AddressFactoryImpl(teleporterConfigFactory: TeleporterConfigFactory) extends AddressFactory {
+  override def loadConf(id: Int): Conf.Address = teleporterConfigFactory.address(id)
+}
+
 object AddressFactory {
-  def apply(teleporterConfigFactory: TeleporterConfigFactory)(implicit _teleporterCenter: TeleporterCenter, _system: ActorSystem): AddressFactory = {
-    new AddressFactory {
-      override implicit val teleporterCenter: TeleporterCenter = _teleporterCenter
-
-      override def loadConf(id: Int): Conf.Address = teleporterConfigFactory.address(id)
-
-    }
-  }
+  def apply(configFactory: TeleporterConfigFactory): AddressFactory = new AddressFactoryImpl(configFactory)
 }

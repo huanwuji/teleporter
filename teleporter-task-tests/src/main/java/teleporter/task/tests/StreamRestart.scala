@@ -50,8 +50,9 @@ object StreamRestart extends App {
 
   val actorRef = streamCreated()
   TimeUnit.SECONDS.sleep(10)
-  val sourceRef = system.actorSelection("/user/test_id")
-  //  sourceRef ! CompletedThenStop
+  val sourceRef = system.actorSelection("/user/3_test*")
+//    sourceRef ! CompletedThenStop
+  println(sourceRef)
   gracefulStop(actorRef, 10.seconds, CompletedThenStop).foreach {
     x ⇒
       println(s"program will restart, $x")
@@ -59,19 +60,19 @@ object StreamRestart extends App {
   }
 
   def streamCreated()(implicit system: ActorSystem, materializer: ActorMaterializer): ActorRef = {
-    val actorRef = system.actorOf(Props[TestPublisher], "test_id")
+    val actorRef = system.actorOf(Props[TestPublisher], "3_test_id")
     RunnableGraph.fromGraph(
-      FlowGraph.create() {
+      GraphDSL.create() {
         implicit b ⇒
-          import FlowGraph.Implicits._
+          import GraphDSL.Implicits._
           val publisher = ActorPublisher[Long](actorRef)
           val bcast = b.add(Broadcast[ByteString](2))
 
-          Source(publisher) ~> Flow[Long].map {
+          Source.fromPublisher(publisher) ~> Flow[Long].map {
             msg ⇒ println(msg); ByteString(msg)
           } ~> bcast.in
-          bcast.out(0) ~> Sink.file(new File("d://aa.txt"))
-          bcast.out(1) ~> Sink.file(new File("d://bb.txt"))
+          bcast.out(0) ~> FileIO.toFile(new File("d://aa.txt"))
+          bcast.out(1) ~> FileIO.toFile(new File("d://bb.txt"))
           ClosedShape
       }).run()
     actorRef

@@ -15,7 +15,7 @@ import scala.util.{Failure, Success}
  * Author: kui.dai
  * Date: 2015/12/17.
  */
-class Publisher extends ActorPublisher[Int] with ActorLogging {
+class StreamPublisher extends ActorPublisher[Int] with ActorLogging {
   val child = context.actorOf(Props(new Actor {
     override def receive: Actor.Receive = {
       case "start" ⇒ Thread.sleep(10000000)
@@ -33,7 +33,8 @@ class Publisher extends ActorPublisher[Int] with ActorLogging {
   @throws[Exception](classOf[Exception])
   override def preStart(): Unit = {
     super.preStart()
-    child ! "start"
+    context.stop(self)
+    //    child ! "start"
   }
 
   override def receive: Receive = {
@@ -53,7 +54,7 @@ class Publisher extends ActorPublisher[Int] with ActorLogging {
   }
 }
 
-class Subscriber extends ActorSubscriber {
+class StreamSubscriber extends ActorSubscriber {
   override protected def requestStrategy: RequestStrategy = OneByOneRequestStrategy
 
   override def receive: Actor.Receive = {
@@ -68,9 +69,15 @@ object StreamStopTests extends App {
 
   import system.dispatcher
 
-  val publisherActorRef = system.actorOf(Props[Publisher])
-  Source(ActorPublisher(publisherActorRef)).runWith(Sink(ActorSubscriber(system.actorOf(Props[Subscriber]))))
-  gracefulStop(publisherActorRef, 10.seconds, "stop").onComplete {
+  val publisherActorRef = system.actorOf(Props[StreamPublisher])
+  val publisherActorRef1 = system.actorOf(Props[StreamPublisher])
+
+  val aa = Source.actorPublisher[Int](Props[StreamPublisher]).runWith(Sink.fromSubscriber(ActorSubscriber(system.actorOf(Props[StreamSubscriber]))))
+  aa
+  Sink.queue()
+  Thread.sleep(10000)
+  println("--------------")
+  gracefulStop(publisherActorRef, 20.seconds, "stop").onComplete {
     case Success(state) ⇒ println(state)
     case Failure(ex) ⇒ ex.printStackTrace()
   }

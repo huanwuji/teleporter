@@ -1,15 +1,10 @@
 package teleporter.task.tests
 
 import akka.actor.ActorSystem
-import akka.pattern._
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
 import com.typesafe.scalalogging.LazyLogging
-import teleporter.integration.component.Control.CompleteThenStop
 import teleporter.integration.component.TeleporterKafkaMessage
 import teleporter.integration.core.TeleporterCenter
-
-import scala.concurrent.duration._
-import scala.util.{Failure, Success}
 
 /**
  * Author: kui.dai
@@ -29,14 +24,14 @@ object KafkaConsumer extends App with LazyLogging {
   center.source[TeleporterKafkaMessage](sourceName)
     .runForeach {
       msg ⇒
-        println(msg)
+        println(msg.id)
         msg.toNext(msg)
     }
-  Thread.sleep(10000)
-  val actorRef = center.actor(sourceName).actorRef
-  gracefulStop(actorRef, 10.seconds, CompleteThenStop)
-    .onComplete {
-      case Success(state) ⇒ println(state)
-      case Failure(ex) ⇒ ex.printStackTrace()
-    }
+  Thread.sleep(100000)
+  //  val actorRef = center.actor(sourceName).actorRef
+  //  gracefulStop(actorRef, 10.seconds, CompleteThenStop)
+  //    .onComplete {
+  //      case Success(state) ⇒ println(state)
+  //      case Failure(ex) ⇒ ex.printStackTrace()
+  //    }
 }

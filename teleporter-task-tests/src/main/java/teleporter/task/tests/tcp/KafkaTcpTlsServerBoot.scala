@@ -4,8 +4,8 @@ import java.io.FileInputStream
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.coding.Gzip
+import akka.stream.TLSProtocol.{SendBytes, SessionBytes, SslTlsInbound}
 import akka.stream._
-import akka.stream.io._
 import akka.stream.scaladsl._
 import akka.util.ByteString
 import com.typesafe.scalalogging.LazyLogging
@@ -23,7 +23,7 @@ object KafkaTcpTlsServerBoot extends App with LazyLogging {
   try {
     implicit val cipherSuites = defaultCipherSuites
     implicit val sslContext = initSslContext(
-      "test".toCharArray,
+      "shuyun-etl".toCharArray,
       //      getClass.getResourceAsStream("/security/keystore.jks"),
       //      getClass.getResourceAsStream("/security/truststore.jks")
       new FileInputStream("D:\\git\\etl\\teleporter\\teleporter-task-tests\\config\\security\\keystore.jks"),
@@ -46,8 +46,8 @@ object KafkaTcpTlsServerBoot extends App with LazyLogging {
           logger.info(s"New connection from: ${connection.remoteAddress}")
           val serverLogic =
             Flow.fromGraph(
-              FlowGraph.create() { implicit builder =>
-                import FlowGraph.Implicits._
+              GraphDSL.create() { implicit builder =>
+                import GraphDSL.Implicits._
                 val merge = builder.add(Merge[TeleporterKafkaMessage](1))
                 val send = Flow[TeleporterKafkaMessage]
                   .buffer(5, OverflowStrategy.backpressure)
@@ -72,10 +72,10 @@ object KafkaTcpTlsServerBoot extends App with LazyLogging {
                       x.toArray.grouped(TId.length).foreach {
                         bytes ⇒
                           val tId = TId.keyFromBytes(bytes)
-                          center.actor(tId.persistenceId).actorRef ! tId
+                          center.actor(tId.persistenceId) ! tId
                       }
                   }))
-                FlowShape(receive.inlet, out.outlet)
+                FlowShape(receive.in, out.out)
               })
           val sslFlow = serverTls(IgnoreComplete).reversed join serverLogic
           connection.flow.join(sslFlow).run()

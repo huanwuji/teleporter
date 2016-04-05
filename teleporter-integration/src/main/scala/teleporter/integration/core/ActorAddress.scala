@@ -1,6 +1,7 @@
 package teleporter.integration.core
 
 import akka.actor.ActorRef
+import teleporter.integration.CmpType
 
 import scala.collection.concurrent.TrieMap
 
@@ -8,19 +9,20 @@ import scala.collection.concurrent.TrieMap
  * date 2015/8/3.
  * @author daikui
  */
-case class ActorAddress(persistenceId: Int, actorRef: ActorRef)
+object ActorAddress
 
 trait ActorAddresses {
-  val persistenceIdMapper = TrieMap[Int, ActorAddress]()
+  val idMapper = TrieMap[(Int,CmpType), ActorRef]()
 
-  def register(id: Int, actorRef: ActorRef): ActorAddresses = {
-    val address = ActorAddress(id, actorRef)
-    persistenceIdMapper += (id → address)
+  def register(id: Int, actorRef: ActorRef, cmpType: CmpType): ActorAddresses = {
+    idMapper += ((id, cmpType) → actorRef)
     this
   }
 
-  def apply(persistenceId: Int): ActorAddress = {
-    persistenceIdMapper(persistenceId)
+  def exists(id: Int, cmpType: CmpType): Boolean = idMapper.contains((id, cmpType))
+
+  def apply(id: Int, cmpType: CmpType): ActorRef = {
+    idMapper((id, cmpType))
   }
 }
 

@@ -124,8 +124,8 @@ class DataSourcePublisherTest extends FunSuite {
     //        Source(ActorPublisher(system.actorOf(publisherProps))).to(Sink(ActorSubscriber(subscriberRef))).run()
     //    Source(ActorPublisher(system.actorOf(pubProps))).runForeach(println)
     //        Source(ActorPublisher[Int](publisherRef)).to(Sink(ActorSubscriber[Int](subscriberRef)).withAttributes(ActorAttributes.supervisionStrategy(decider))).run()
-    val future = Source(ActorPublisher(publisherRef)).to(Sink.foreach(println)).run()
-        publisherRef ! "test"
+    val future = Source.fromPublisher(ActorPublisher(publisherRef)).to(Sink.foreach(println)).run()
+    publisherRef ! "test"
     //    Source(1 to 20).to(Sink(ActorSubscriber[Int](subscriberRef))).run()
     //        Await.result(future, 1.minutes)
     Uninterruptibles.sleepUninterruptibly(1, TimeUnit.MINUTES)
@@ -173,8 +173,8 @@ class DataSourcePublisherTest extends FunSuite {
       Duration.create(5, TimeUnit.SECONDS),
       Duration.create(10, TimeUnit.SECONDS),
       0.2))
-    Source(ActorPublisher[Long](publishActor))
-      .to(Sink(ActorSubscriber(subscribeActor))).run()
+    Source.fromPublisher(ActorPublisher[Long](publishActor))
+      .to(Sink.fromSubscriber(ActorSubscriber(subscribeActor))).run()
     publishActor ! Cancel
     Thread.sleep(60 * 1000)
   }

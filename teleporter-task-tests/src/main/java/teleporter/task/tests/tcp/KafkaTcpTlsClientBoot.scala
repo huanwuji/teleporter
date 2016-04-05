@@ -3,9 +3,9 @@ package teleporter.task.tests.tcp
 import java.io.FileInputStream
 
 import akka.actor.ActorSystem
-import akka.stream.io._
+import akka.stream.TLSProtocol.{SendBytes, SessionBytes}
 import akka.stream.scaladsl.Tcp
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision, TLSClosing}
 import akka.util.ByteString
 import com.typesafe.scalalogging.LazyLogging
 import org.apache.kafka.clients.producer.ProducerRecord
@@ -28,7 +28,7 @@ object KafkaTcpTlsClientBoot extends App with LazyLogging {
   try {
     implicit val cipherSuites = defaultCipherSuites
     implicit val sslContext = initSslContext(
-      "test".toCharArray,
+      "shuyun-etl".toCharArray,
       //      getClass.getResourceAsStream("/security/keystore.jks"),
       //      getClass.getResourceAsStream("/security/truststore.jks")
       new FileInputStream("D:\\git\\etl\\teleporter\\teleporter-task-tests\\config\\security\\keystore.jks"),
@@ -43,8 +43,8 @@ object KafkaTcpTlsClientBoot extends App with LazyLogging {
     implicit val mat = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
 
     val center = TeleporterCenter()
-    val outgoingConn = clientTls(Closing.ignoreComplete) join Tcp().outgoingConnection("0.0.0.0", 9092)
-    val forwardSourceId = "source-forward"
+    val outgoingConn = clientTls(TLSClosing.ignoreComplete) join Tcp().outgoingConnection("0.0.0.0", 9092)
+    val forwardSourceId = "source"
     center.source[TId](forwardSourceId)
       .grouped(2).map(_.map(_.toBytes).foldLeft(Array[Byte]())(_ ++ _))
       .map(x ⇒ SendBytes(TcpComponent.addLengthHeader(ByteString(x))))
@@ -66,7 +66,7 @@ object KafkaTcpTlsClientBoot extends App with LazyLogging {
           TeleporterMessage(id = tId,
             data = new ProducerRecord[Array[Byte], Array[Byte]](m.getTopic + "_test", m.getPartition, m.getKey.toByteArray, m.getMessage.toByteArray),
             toNext = {
-              msg: TeleporterKafkaRecord ⇒ center.actor(forwardSourceId).actorRef ! tId
+              msg: TeleporterKafkaRecord ⇒ center.actor(22) ! tId
             })
       }.to(center.sink("sink-kuidai-sink")).run()
   } catch {

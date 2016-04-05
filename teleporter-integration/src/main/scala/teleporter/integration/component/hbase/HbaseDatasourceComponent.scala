@@ -9,20 +9,17 @@ import teleporter.integration.core._
 
 
 /**
- * Created by joker on 15/10/9.
+ * Created by joker on 15/10/9
  */
+class HbaseAddress(val conf: Conf.Address, val client: Connection) extends Address[Connection] {
+  override def close(): Unit = client.close()
+}
 
-class HbaseAddressBuilder(override val conf: Conf.Address)(implicit override val teleporterCenter: TeleporterCenter) extends AddressBuilder[Connection] with PropsSupport {
+class HbaseAddressBuilder(override val conf: Conf.Address)(implicit override val center: TeleporterCenter) extends AddressBuilder[Connection] with PropsSupport {
   override def build: Address[Connection] = {
     val config = HBaseConfiguration.create()
-    cmpProps(conf.props).foreach(t2 ⇒ config.set(t2._1, String.valueOf(t2._2)))
-    new Address[Connection] {
-      override val _conf: Conf.Address = conf
-
-      override val client: Connection = ConnectionFactory.createConnection(config)
-
-      override def close(): Unit = client.close()
-    }
+    //cmpProps(conf.props).foreach(t2 ⇒ config.set(t2._1, String.valueOf(t2._2)))
+    new HbaseAddress(conf, ConnectionFactory.createConnection(config))
   }
 }
 

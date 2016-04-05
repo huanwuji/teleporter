@@ -1,13 +1,26 @@
 export interface Task {
     id?:number;
     name:string;
-    props:any;
-    desc:string;
+    props?:any;
+    streamScript?:string;
+    desc?:string;
+}
+export interface Stream {
+    id?:number;
+    taskId?:number;
+    name?:string;
+    props?:any;
+    desc?:any;
+}
+export interface GlobalProps {
+    id?:number;
+    name:string;
+    props?:any;
+    desc?:string;
 }
 
 export interface Address {
     id? :number;
-    taskId?:number;
     category?:string;
     name:string;
     props?:any;
@@ -16,15 +29,18 @@ export interface Address {
 export interface Source {
     id? :number;
     taskId?:number;
+    streamId?:number;
     addressId?:number;
     category?:string;
     name:string;
+    status?:string;
     props?:any;
 }
 
 export interface Sink {
     id? :number;
     taskId?:number;
+    streamId?:number;
     addressId?:number;
     category?:string;
     name:string;
@@ -35,6 +51,7 @@ export interface PageRollerProps {
     page?:string;
     pageSize?:string;
     maxPage?:string;
+    offset?:string;
 }
 
 export interface TimeRollerProps {
@@ -67,14 +84,22 @@ export interface Transaction {
     batchSize?:number;
     maxAge?:string;
     maxCacheSize?:number;
+    commitDelay?:string;
+    recoveryPointEnabled?:boolean;
+    timeoutRetry?:boolean;
 }
 
 export interface KafkaSourceProps {
-    topic:string;
+    topics:string;
 }
 
 export interface DataSourceSourceProps extends PageRollerProps,TimeRollerProps {
     sql:string;
+    errorRules?:string;
+}
+
+export interface DataSourceSinkProps {
+    errorRules?:string;
 }
 
 export interface KafkaProps extends Transaction,KafkaSourceProps {
@@ -86,4 +111,20 @@ export interface DataSourceProps {
     username?:string;
     password?:string;
     maximumPoolSize?:string;
+}
+
+export interface MongoProps {
+    url?:string;
+}
+
+export interface MongoSourceProps extends PageRollerProps,TimeRollerProps {
+    database?:string;
+    collection?:string;
+    query?:string;
+}
+
+export interface InfluxdbProps {
+    host?:string;
+    port?:string;
+    db?:string;
 }

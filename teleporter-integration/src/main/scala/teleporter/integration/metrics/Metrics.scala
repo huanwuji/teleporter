@@ -1,48 +1,91 @@
 package teleporter.integration.metrics
 
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
-import akka.actor.{Actor, ActorLogging}
-import com.codahale.metrics._
-import nl.grons.metrics.scala.{HdrMetricBuilder, InstrumentedBuilder}
-import teleporter.integration.Scheduled
-import teleporter.integration.component.{InfluxDto, InfluxdbClient}
+import com.google.common.base.Stopwatch
 
-import scala.collection.JavaConversions._
-import scala.concurrent.duration._
+import scala.collection.concurrent.TrieMap
 
 /**
  * Author: kui.dai
  * Date: 2015/12/10.
  */
-class Metrics
+case class Count(count: Long, start: Long, end: Long)
 
-trait HdrInstrumentedBuilder extends InstrumentedBuilder {
-  override lazy protected val metricBuilder = new HdrMetricBuilder(metricBaseName, metricRegistry, resetAtSnapshot = true)
+case class Time(count: Long, totalSpend: Long, min: Long, max: Long)
+
+object MetricsImplicits {
+  implicit def count2Map(count: Count): Map[String, Any] = Map(
+    "count" → count.count,
+    "start" → count.start,
+    "end" → count.end
+  )
+
+  implicit def time2Map(time: Time): Map[String, Any] = Map(
+    "count" → time.count,
+    "totalSpend" → time.totalSpend,
+    "min" → time.min,
+    "max" → time.max
+  )
 }
 
-class InfluxdbMetricsReporter(period: FiniteDuration, registry: MetricRegistry)(implicit client: InfluxdbClient) extends Actor with ActorLogging {
+trait Metrics[T] {
+  def dump(): T
+}
 
-  import context.dispatcher
+class MetricsCounter extends Metrics[Count] {
+  val count = new AtomicLong()
+  var current = System.currentTimeMillis()
 
-  val clock = Clock.defaultClock
-  context.system.scheduler.schedule(period, period, self, Scheduled)
-
-  override def receive: Receive = {
-    case Scheduled ⇒ reports(registry)
+  def inc(inc: Long = 1L): Unit = {
+    count.addAndGet(inc)
   }
 
-  def reports(registry: MetricRegistry): Unit = {
-    val timestamp: Long = TimeUnit.MILLISECONDS.toSeconds(clock.getTime)
-    registry.getGauges.foreach(t2 ⇒ report(t2._1, "gauge", t2._2, timestamp))
-    registry.getCounters.foreach(t2 ⇒ report(t2._1, "counter", t2._2, timestamp))
-    registry.getHistograms.foreach(t2 ⇒ report(t2._1, "histogram", t2._2, timestamp))
-    registry.getMeters.foreach(t2 ⇒ report(t2._1, "meter", t2._2, timestamp))
-    registry.getTimers.foreach(t2 ⇒ report(t2._1, "timer", t2._2, timestamp))
+  def dec(dec: Long = -1L): Unit = {
+    count.addAndGet(dec)
   }
 
-  def report(name: String, category: String, data: Any, timestamp: Long): Unit = {
-    val dto = InfluxDto(name, Map(category → data), System.currentTimeMillis())
-    client.save(dto)
+  def dump(): Count = {
+    val prev = current
+    current = System.currentTimeMillis()
+    Count(count.getAndSet(0), prev, current)
   }
+}
+
+class MetricsTimer extends Metrics[Time] {
+  val count = new AtomicLong()
+  var min = 0L
+  var max = 0L
+  var totalSpend = 0L
+
+  def time[A](f: ⇒ A): A = {
+    count.incrementAndGet()
+    val stopwatch = Stopwatch.createStarted()
+    try {
+      f
+    } finally {
+      stopwatch.stop
+      val spend = stopwatch.elapsed(TimeUnit.NANOSECONDS)
+      if (min > spend || min == 0) min = spend
+      if (max < spend) max = spend
+      totalSpend += spend
+    }
+  }
+
+  def dump(): Time = {
+    val (_min, _max, _totalSpend) = (min, max, totalSpend)
+    min = 0L
+    max = 0L
+    totalSpend = 0L
+    Time(count.getAndSet(0L), _totalSpend, _min, _max)
+  }
+}
+
+class MetricRegistry {
+  val metrics = TrieMap[String, Any]()
+
+  def counter(name: String): MetricsCounter = metrics.getOrElseUpdate(name, new MetricsCounter).asInstanceOf[MetricsCounter]
+
+  def timer(name: String): MetricsTimer = metrics.getOrElseUpdate(name, new MetricsTimer).asInstanceOf[MetricsTimer]
 }

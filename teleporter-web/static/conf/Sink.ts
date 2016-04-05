@@ -1,23 +1,27 @@
 /// <reference path="../../typings/tsd.d.ts" />
-import {
-    Component, Injectable, View,
-    NgSwitch,NgSwitchWhen,NgFor,NgIf,
-    Control, ControlGroup, ControlArray,
-    CORE_DIRECTIVES, FORM_DIRECTIVES
-} from 'angular2/angular2';
-import {Http,Headers,Request,RequestOptions,RequestMethods} from 'angular2/http';
+import {Component} from 'angular2/core';
+import {Http,Headers,Request,RequestOptions} from 'angular2/http';
 import {RouteParams,Location,ROUTER_DIRECTIVES} from 'angular2/router';
 import * as Global from "../Global";
 import {Sink} from "../Types";
 import * as _ from "underscore";
+import {MetricsChart} from "../MetricsChart";
+import {Autocomplete} from "../third/Autocomplete"
+import {Search} from "./Search"
+import {DataSourceSinkForm} from "./DataSource"
 
 @Component({
-    selector: 'sink-list'
-})
-@View ({
+    selector: 'sink-list',
     template: `
+    <form class="form-inline">
+        <div class="form-group">
+            <label class="sr-only" for="search">search</label>
+            <input type="search" class="form-control" id="search" placeholder="like {id:3434}" [(ngModel)]="searchText">
+        </div>
+        <button class="btn btn-default" [routerLink]="['/SinkList',{'page':page, 'search':searchText}]">search</button>
+    </form>
     <table class="table table-striped table-hover">
-        <thread>
+        <tbody>
             <tr>
                 <th>id</th>
                 <th>name</th>
@@ -25,18 +29,16 @@ import * as _ from "underscore";
                 <th>taskId</th>
                 <th>addressId</th>
                 <th>props</th>
-                <th><a class="btn btn-primary" [router-link]="['/SinkDetailCreate']">add</a></th>
+                <th><a class="btn btn-primary" [routerLink]="['/SinkDetailCreate']">add</a></th>
             </tr>
-        </thread>
-        <tbody>
-            <tr *ng-for="#sink of sinks">
+            <tr *ngFor="#sink of sinks">
                 <td>
-                    <a [router-link]="['/SinkDetailEdit', {'id':sink.id}]">{{sink.id}}</a>
+                    <a [routerLink]="['/SinkDetailEdit', {'id':sink.id}]">{{sink.id}}</a>
                 </td>
-                <td>{{sink.name}}</td>
+                <td>{{sink.name}}&nbsp;<span class="glyphicon glyphicon-stats" aria-hidden="true" (click)="metricsName=sink.name"></span></td>
                 <td>{{sink.category}}</td>
-                <td>{{sink.taskId}}</td>
-                <td>{{sink.addressId}}</td>
+                <td><a [routerLink]="['/TaskDetailEdit', {'id':sink.taskId}]">{{sink.taskId}}</a></td>
+                <td><a [routerLink]="['/AddressDetailEdit', {'id':sink.addressId}]">{{sink.addressId}}</a></td>
                 <td title="{{sink.props}}">{{sink.props|json|slice:0:50}}...</td>
                 <td><button class="btn btn-danger" (click)="delete(sink.id)">del</button></td>
             </tr>
@@ -45,41 +47,43 @@ import * as _ from "underscore";
     <hr/>
     <div class="row">
         <div class="col-sm-1">
-            <h4 class="pull-right"><a *ng-if="page>1" [router-link]="['/SinkList',{'page':page-1}]">pre</a></h4>
+            <h4 class="pull-right"><a *ngIf="page>1" [routerLink]="['/SinkList',{'page':page-1}]">pre</a></h4>
         </div>
         <div class="col-sm-10"></div>
         <div class="col-sm-1">
-            <h4 class="pull-left"><a *ng-if="sinks.length==pageSize" [router-link]="['/sinkList',{'page':page+1}]">next</a></h4>
+            <h4 class="pull-left"><a *ngIf="sinks.length==pageSize" [routerLink]="['/SinkList',{'page':page+1}]">next</a></h4>
         </div>
     </div>
+   <div class="row" *ngIf="metricsName">
+        <metrics-chart [name]="metricsName"></metrics-chart>
+    </div>
     `,
-    directives: [
-        NgSwitch, NgSwitchWhen, NgFor, NgIf,
-        CORE_DIRECTIVES, FORM_DIRECTIVES, ROUTER_DIRECTIVES
-    ]
+    directives: [ROUTER_DIRECTIVES, MetricsChart]
 })
 export class SinkList {
     page:number = 1;
     pageSize:number = Global.PAGE_SIZE;
     sinks:Sink[] = [];
+    searchText:string;
 
     constructor(public http:Http, params:RouteParams) {
         let currPage = parseInt(params.get("page")) || 1;
+        this.searchText = decodeURI(params.get("search") || "{}");
         this.page = currPage;
-        this.query(currPage);
+        this.query(currPage, this.searchText);
     }
 
-    query(page) {
-        this.http.get(`${Global.SINK_PATH}?page=${page}&pageSize=${this.pageSize}`)
+    query(page, search = "{}") {
+        this.http.get(`${Global.SINK_PATH()}?page=${page}&pageSize=${this.pageSize}&search=${search}`)
             .subscribe(res => {
-                this.sinks = JSON.parse(res.text());
+                this.sinks = res.json();
             }
         );
     }
 
     delete(id) {
         if (confirm('Are you sure you want to delete?')) {
-            this.http.get(`${Global.SINK_PATH}/${id}?action=delete`)
+            this.http.get(`${Global.SINK_PATH()}/${id}?action=delete`)
                 .subscribe(res => {
                     console.log("delete success", res);
                     this.query(this.page);
@@ -89,46 +93,82 @@ export class SinkList {
 }
 
 @Component({
-    selector: 'sink-detail'
-})
-@View ({
+    selector: 'sink-detail',
     template: `
-     <div class="form-inline">
+    <div class="form-horizontal">
         <div class="form-group">
-            <label for="id">id</label>
-            <input type="text" class="form-control" id="id" [(ng-model)]="sink.id" placeholder="id" readonly/>
+            <label for="id" class="col-sm-3 control-label">id</label>
+            <div class="col-sm-9">
+                <input type="text" class="form-control" id="id" [(ngModel)]="sink.id" placeholder="id" readonly/>
+            </div>
         </div>
         <div class="form-group">
-            <label for="taskId">taskId</label>
-            <input type="number" class="form-control" id="task" [(ng-model)]="sink.taskId" placeholder="taskId"/>
+            <label for="taskId" class="col-sm-3 control-label">taskId</label>
+            <div class="col-sm-9">
+                <autocomplete [initialValue]="sink.taskId"
+                [searchUrl]="taskSearch"
+                (result)="sink.taskId=$event"></autocomplete>
+            </div>
         </div>
         <div class="form-group">
-            <label for="addressId">addressId</label>
-            <input type="number" class="form-control" id="task" [(ng-model)]="sink.addressId" placeholder="addressId"/>
+            <label for="streamId" class="col-sm-3 control-label">streamId</label>
+            <div class="col-sm-9">
+                <autocomplete [initialValue]="sink.streamId"
+                [searchUrl]="streamSearch"
+                (result)="sink.streamId=$event"></autocomplete>
+            </div>
         </div>
         <div class="form-group">
-            <label for="category">category</label>
-            <select id="category" [(ng-model)]="sink.category" (change)="categoryChange()">
-                <option value="kafka">kafka</option>
-                <option value="dataSource">dataSource</option>
-            </select>
+            <label for="addressId" class="col-sm-3 control-label">addressId</label>
+            <div class="col-sm-9">
+                <autocomplete [initialValue]="sink.addressId"
+                [searchUrl]="addressSearch"
+                (result)="sink.addressId=$event"></autocomplete>
+            </div>
         </div>
         <div class="form-group">
-            <label for="name">name</label>
-            <input type="text" class="form-control" id="name" [(ng-model)]="sink.name" placeholder="name" (change)="nameChange()" *ng-if="edit" readonly/>
-            <input type="text" class="form-control" id="name" [(ng-model)]="sink.name" placeholder="name" (change)="nameChange()" *ng-if="!edit"/>
+            <label for="category" class="col-sm-3 control-label">category</label>
+            <div class="col-sm-9">
+                <select id="category" [(ngModel)]="sink.category" (change)="categoryChange()" class="form-control">
+                    <option value="kafka">kafka</option>
+                    <option value="dataSource">dataSource</option>
+                </select>
+            </div>
         </div>
-     </div>
-     </br>
-     </hr>
+        <div class="form-group">
+            <label for="name" class="col-sm-3 control-label">name</label>
+            <div class="col-sm-9">
+                <input type="text" class="form-control" id="name" [(ngModel)]="sink.name" placeholder="name" *ngIf="edit" readonly/>
+                <input type="text" class="form-control" id="name" [(ngModel)]="sink.name" placeholder="name" *ngIf="!edit"/>
+            </div>
+        </div>
+    </div>
+     <hr/>
+     <br/>
      <div class="form-horizontal">
+     <!--
         <div class="form-group">
            <label for="requestStrategy" class="col-sm-3 control-label">requestStrategy</label>
            <div class="col-sm-9">
-                <input type="text" class="form-control" id="name" [(ng-model)]="sink.props.requestStrategy" placeholder="eg, like oneByOne,zero,watermark(10,5),default:watermark(100,50)"/>
+                <input type="text" class="form-control" id="requestStrategy" [(ngModel)]="sink.props.requestStrategy" placeholder="eg, like oneByOne,zero,watermark(10,5),default:watermark(100,50)"/>
+           </div>
+        </div>
+        -->
+        <div class="form-group">
+           <label for="parallelism" class="col-sm-3 control-label">parallelism</label>
+           <div class="col-sm-9">
+                <input type="number" class="form-control" id="parallelism" [(ngModel)]="sink.props.subscriber.parallelism" placeholder="1"/>
+           </div>
+        </div>
+        <div class="form-group">
+           <label for="prototype" class="col-sm-3 control-label">prototype</label>
+           <div class="col-sm-9">
+                <input type="text" class="form-control" id="prototype" [(ngModel)]="sink.props.prototype" placeholder="true | false"/>
            </div>
         </div>
      </div>
+     <h4>cmp</h4>
+     <data-source-sink *ngIf="sink.category=='dataSource'" [inputProps]="tmpCmpProps" (outputProps)="propsChanged($event)"></data-source-sink>
      <div class="col-sm-offset-3 col-sm-9">
         <div class="form-group">
             <button (click)="save()" class="btn btn-primary">save</button>
@@ -136,14 +176,14 @@ export class SinkList {
      </div>
      <pre>{{propsPre}}</pre>
     `,
-    directives: [
-        NgFor, NgIf,
-        CORE_DIRECTIVES, FORM_DIRECTIVES, ROUTER_DIRECTIVES
-    ]
+    directives: [Autocomplete, DataSourceSinkForm]
 })
-export class SinkDetail {
+export class SinkDetail extends Search {
     sink:Sink = {
         category: 'kafka', name: '', props: {
+            subscriber: {
+                parallelism: 1
+            },
             cmp: {}
         }
     };
@@ -151,13 +191,17 @@ export class SinkDetail {
     edit:boolean = false;
 
     constructor(public http:Http, public location:Location, params:RouteParams) {
+        super();
         let id = params.get("id");
         if (id) {
             this.edit = true;
-            this.http.get(`${Global.SINK_PATH}/${id}`)
+            this.http.get(`${Global.SINK_PATH()}/${id}`)
                 .subscribe(res => {
-                    this.sink = JSON.parse(res.text());
+                    this.sink = res.json();
                     let props = this.sink.props;
+                    if (!this.sink.props.subscriber) {
+                        this.sink.props.subscriber = {};
+                    }
                     this.tmpCmpProps = props.cmp
                 });
         }
@@ -165,22 +209,19 @@ export class SinkDetail {
 
     save() {
         if (this.edit) {
-            this.http.post(`${Global.SINK_PATH}/${this.sink.id}`, JSON.stringify(this.sink))
+            this.http.post(`${Global.SINK_PATH()}/${this.sink.id}`, JSON.stringify(this.sink))
                 .subscribe(res => {
                     console.log("update", res);
                     this.location.back();
                 });
         } else {
-            this.http.post(Global.SINK_PATH, JSON.stringify(this.sink))
+            this.http.post(Global.SINK_PATH(), JSON.stringify(this.sink))
                 .subscribe(res => {
-                    console.log("save", res);
-                    this.location.back();
+                    this.sink = res.json();
+                    let props = this.sink.props;
+                    this.tmpCmpProps = props.cmp
                 });
         }
-    }
-
-    nameChange():void {
-        this.sink.id = Global.hashCode(this.sink.name);
     }
 
     categoryChange() {

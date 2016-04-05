@@ -2,7 +2,7 @@ package teleporter.integration.component
 
 import java.nio.ByteOrder
 
-import akka.stream.io.Framing
+import akka.stream.scaladsl.Framing
 import akka.util.ByteString
 import com.typesafe.scalalogging.LazyLogging
 

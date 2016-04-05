@@ -1,6 +1,7 @@
 package teleporter.web
 
 import org.mongodb.scala._
+import org.mongodb.scala.model.Filters._
 import org.scalatest.FunSuite
 
 /**
@@ -22,9 +23,12 @@ class MongoTest extends FunSuite {
     val client: MongoClient = MongoClient("mongodb://172.18.2.156:27017")
     val database: MongoDatabase = client.getDatabase("teleporter_web")
     database.listCollectionNames().toFuture().foreach(println)
-    val collection: MongoCollection[Document] = database.getCollection("source_conf")
-    val sourceConf = collection.find[Document]().toFuture()
-    sourceConf.foreach(_.foreach(doc ⇒ println(doc.toJson())))
+    val collection = database.getCollection("source")
+    val source = collection.find(equal("id", 222)).toFuture()
+    source.foreach {
+      case Nil ⇒ println(true)
+      case _ ⇒ println(false)
+    }
     Thread.sleep(5000)
   }
 }

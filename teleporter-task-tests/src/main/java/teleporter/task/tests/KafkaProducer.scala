@@ -15,7 +15,7 @@ import scala.concurrent.duration._
  */
 object KafkaProducer extends App with LazyLogging {
   val decider: Supervision.Decider = {
-    case e: Exception => logger.error(e.getLocalizedMessage, e); Supervision.Resume
+    case e: Exception ⇒ logger.error(e.getLocalizedMessage, e); Supervision.Resume
   }
   implicit val system = ActorSystem()
   implicit val mater = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
@@ -23,10 +23,10 @@ object KafkaProducer extends App with LazyLogging {
   import system.dispatcher
 
   val center = TeleporterCenter()
-  center.openMetrics()
+  center.openMetrics(5.seconds)
   try {
     var i = 0
-    Source.tick(3.second, 3.second, "test").map {
+    Source.tick(1.seconds, 1000.millis, "test1").map {
       msg ⇒
         i += 1
         val kafkaRecord = new KafkaRecord("test", 0, msg.getBytes, (msg + i).getBytes)
