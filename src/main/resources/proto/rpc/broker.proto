@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package teleporter.integration.cluster.rpc.proto.broker;
+
+message LogRequest {
+    int32 request = 1;
+    string path = 2;
+    string cmd = 3;
+}
+
+message Partition {
+    string key = 1;
+    repeated string bootKeys = 2;
+}
+
+message LinkAddress {
+    string address = 1;
+    string instance = 2;
+    repeated string keys = 3;
+    int64 timestamp = 4;
+}
+
+message LinkVariable {
+    string variableKey = 1;
+    string instance = 2;
+    repeated string keys = 3;
+    int64 timestamp = 4;
+}
+
+message LinkInstance {
+    string instance = 1;
+    string broker = 2;
+    string ip = 3;
+    int32 port = 4;
+    int64 timestamp = 5;
+}
+
+message TaskState {
+    string task = 1;
+    string broker = 2;
+    int64 timestamp = 3;
+}
+
+message BrokerState {
+    string broker = 1;
+    string task = 2;
+    int64 timestamp = 3;
+}
+
+message InstanceState {
+    string instance = 1;
+    string broker = 2;
+    string ip = 3;
+    int32 port = 4;
+    repeated string partitions = 5;
+    int64 timestamp = 6;
+}
+
+message KVGet {
+    string key = 1;
+}
+
+message RangeRegexKV {
+    string key = 1;
+    int32 start = 2;
+    int32 limit = 3;
+}

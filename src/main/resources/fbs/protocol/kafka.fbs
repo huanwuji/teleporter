@@ -1,0 +1,13 @@
+namespace teleporter.integration.protocol.fbs.generate;
+
+table FbsKafkaRecord {
+  tId:[byte];
+  topic:string;
+  key:[byte];
+  partition:int;
+  data:[byte];
+}
+
+table FbsKafkaRecords {
+  records:[FbsKafkaRecord];
+}

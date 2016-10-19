@@ -1,0 +1,11 @@
+namespace teleporter.integration.cluster.rpc.fbs.generate;
+
+table TeleporterRequest {
+    path:string;
+    body:[byte];
+}
+
+table TeleporterResponse {
+    path:string;
+    body:[byte];
+}

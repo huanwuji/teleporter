@@ -1,0 +1,27 @@
+namespace teleporter.integration.protocol.fbs.generate;
+
+enum ActionType:byte { Update = 0, Upsert = 1, }
+
+table JdbcParam {
+    type:int;
+    value:[byte];
+}
+
+table JdbcStatement {
+    sql:string;
+    params:[JdbcParam];
+}
+
+table JdbcAction {
+    type:ActionType;
+    statements:[JdbcStatement];
+}
+
+table JdbcMessage {
+    tid:[byte];
+    actions:[JdbcAction];
+}
+
+table JdbcMessages {
+    messages:[JdbcMessage];
+}

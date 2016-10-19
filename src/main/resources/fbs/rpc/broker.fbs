@@ -1,0 +1,13 @@
+include "rpc.fbs";
+
+namespace teleporter.integration.cluster.rpc.fbs.broker.generate;
+
+table LogRequest {
+    path:string;
+    tail:string;
+}
+
+table ConfigChangeRequest {
+    key:string;
+    timestamp:long;
+}

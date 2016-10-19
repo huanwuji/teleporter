@@ -1,0 +1,24 @@
+<div>
+  <h3>
+    /<a [routerLink]="['/broker', ns]"><strong>broker</strong></a>/<a
+    [routerLink]="['/ns']">{{ns}}</a>/{{key}}
+  </h3>
+</div>
+<div>
+  <form (ngSubmit)="onSubmit()" [formGroup]="formGroup">
+
+    <div *ngFor="let formItem of formItems">
+      <df-form-item [formItem]="formItem" [form]="formGroup"></df-form-item>
+    </div>
+
+    <div class="form-group row">
+      <div class="offset-sm-2 col-sm-10">
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+
+    <div *ngIf="payLoad" class="form-group row">
+      <strong>Saved the following values</strong><br>{{payLoad}}
+    </div>
+  </form>
+</div>

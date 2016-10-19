@@ -1,0 +1,34 @@
+<div class="row">
+  <h3>
+    /<a [routerLink]="['/source', ns, task, stream]"><strong>source</strong></a>/<a
+    [routerLink]="['/ns']">{{ns}}</a>/<a
+    [routerLink]="['/task', ns]">{{task}}</a>/<a
+    [routerLink]="['/stream', ns, task]">{{stream}}</a>/{{key}}
+  </h3>
+</div>
+<div>
+  <form (ngSubmit)="onSubmit()" [formGroup]="formGroup">
+
+    <div class="form-group">
+      <label for="category" class="col-sm-2 control-label">category</label>
+      <select class="form-control" id="category" (change)="categoryChange($event)">
+        <option value="kafka">kafka</option>
+        <option value="dataSource">dataSource</option>
+        <option value="mongo">mongo</option>
+      </select>
+    </div>
+    <div *ngFor="let formItem of formItems">
+      <df-form-item [formItem]="formItem" [form]="formGroup"></df-form-item>
+    </div>
+
+    <div class="form-group row">
+      <div class="offset-sm-2 col-sm-10">
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+
+    <div *ngIf="payLoad" class="form-group row">
+      <strong>Saved the following values</strong><br>{{payLoad}}
+    </div>
+  </form>
+</div>

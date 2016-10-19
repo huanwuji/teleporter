@@ -1,10 +1,4 @@
-# teleporter
-For multiple akka-stream managerment.
-The idea from camel and spring integration.
-Add transaction,fault tolerance, influxdb metrics, config mangement steam defined.
-Used for data transfer,push,poll.
-Support kafka,jdbc,mongo.
-teleporter-web is an angular2 and akka-http web managerment.
-
-##defined
-task -> streams -> stream{graph(source,sink,flow)}
+##About
+The idea from camel and spring integration,  and I will use akka-streaming, reactive-streams-jvm
+Every stream has source, flow, sink. source sink is elso the publisher and subscribe.
+So I will make every thing like this. **simple,flexibility and powerful**.

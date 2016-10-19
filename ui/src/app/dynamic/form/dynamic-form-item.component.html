@@ -1,0 +1,67 @@
+<div [formGroup]="form" class="form-group row">
+  <label [attr.for]="formItem.key" class="col-sm-2 control-label">{{formItem.label}}</label>
+  <div [ngSwitch]="formItem.controlType" class="col-sm-10">
+
+    <input *ngSwitchCase="'textbox'" [formControlName]="formItem.key" class="form-control"
+           [id]="formItem.key" [type]="formItem.type" placeholder="{{formItem.placeholder}}"
+           [readonly]="formItem.readonly"/>
+
+    <textarea *ngSwitchCase="'textarea'" [formControlName]="formItem.key" class="form-control"
+              [id]="formItem.key" placeholder="{{formItem.placeholder}}"
+              [readonly]="formItem.readonly"></textarea>
+
+    <select *ngSwitchCase="'dropdown'" [formControlName]="formItem.key" class="form-control"
+            [id]="formItem.key">
+      <option *ngFor="let opt of formItem.options" [value]="opt.key">{{opt.value}}</option>
+    </select>
+
+    <div *ngSwitchCase="'group'" [formGroupName]="formItem.key">
+      <div *ngFor="let childItem of formItem.value">
+        <df-form-item [formItem]="childItem" [form]="form.controls[formItem.key]"></df-form-item>
+      </div>
+    </div>
+
+    <div *ngSwitchCase="'dynamicGroup'" [formGroupName]="formItem.key">
+      <div class="form-group">
+        <div class="col-sm-2">
+          <input class="form-control" [(ngModel)]="dynamicKey" [ngModelOptions]="{standalone: true}" type="text">
+        </div>
+        <div class="col-sm-9">
+          <span class="btn btn-primary" (click)="dynamicItemAdd()">add</span>
+        </div>
+      </div>
+
+      <div *ngFor="let entry of formItem.value; let i = index">
+        <div class="form-group">
+          <label [attr.for]="entry.key" class="col-sm-2 control-label">{{entry.key}}</label>
+          <div class="col-sm-9">
+            <input [formControlName]="entry.key" class="form-control" type="text">
+          </div>
+          <div class="col-sm-1">
+            <span class="btn btn-danger" (click)="dynamicItemDel(entry.key)">del</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div *ngSwitchCase="'array'" [formArrayName]="formItem.key">
+      <div class="col-sm-offset-8 col-sm-1">
+        <span class="btn btn-primary" (click)="dynamicItemAdd()">add</span>
+      </div>
+      <div *ngFor="let ele of formItem.value; let i = index">
+        <div class="form-group">
+          <div class="col-sm-9">
+            <input [formControlName]="i" class="form-control" type="text">
+          </div>
+          <div class="col-sm-1">
+            <span class="btn btn-danger" (click)="dynamicItemDel(i)">del</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!--<div [hidden]="!isValid"-->
+  <!--class="alert alert-danger">-->
+  <!--{{formItem.label}} is required-->
+  <!--</div>-->
+</div>

@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package teleporter.integration.cluster.rpc.proto.instance;
+
+message ConfigChangeNotify {
+    string key = 1;
+    enum Action {
+        ADD = 0;
+        UPDATE = 1;
+        UPSERT = 2;
+        REMOVE = 3;
+    }
+    Action action = 2;
+    int64 timestamp = 3;
+}
+
+message HealthResponse {
+    float totalMemory = 1;
+    float freeMemory = 2;
+}
+
+message LogResponse {
+    string line = 1;
+}

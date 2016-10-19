@@ -1,0 +1,14 @@
+{
+  "/config": {
+    "target": "http://localhost:8081",
+    "secure": false
+  },
+  "/runtime": {
+    "target": "http://localhost:8081",
+    "secure": false
+  },
+  "/log": {
+    "target": "http://localhost:8081",
+    "secure": false
+  }
+}

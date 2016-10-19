@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package teleporter.integration.cluster.rpc.proto;
+
+enum EventType {
+    KVGet = 0;
+    RangeRegexKV = 1;
+    KVSave = 2;
+    AtomicSaveKV = 3;
+
+    LogRequest = 10;
+    LogResponse = 11;
+
+    LinkInstance = 20;
+    LinkAddress = 21;
+    LinkVariable = 22;
+    TaskState = 31;
+    BrokerState = 32;
+    InstanceState = 33;
+
+    ConfigChangeNotify = 40;
+    Ping = 51;
+    Pong = 52;
+}
+
+enum EventStatus {
+    Failure = 0;
+    Success = 1;
+}
+
+message TeleporterEvent {
+    int64 seqNr = 1;
+    EventType type = 2;
+    enum Role {
+        CLIENT = 0;
+        SERVER = 1;
+    }
+    Role role = 3;
+    EventStatus status = 4;
+    bytes body = 5;
+}
+
+message KV {
+    string key = 1;
+    string value = 2;
+}
+
+message AtomicKV {
+    string key = 1;
+    string expect = 2;
+    string update = 3;
+}
+
+message KVS {
+    repeated KV kvs = 1;
+}

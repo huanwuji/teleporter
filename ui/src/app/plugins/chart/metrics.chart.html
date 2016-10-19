@@ -1,0 +1,59 @@
+<div class="row">
+  <div class="col-md-10">
+    <div class="form-group-sm form-inline">
+      <p>{{params.name}}</p>
+      <span class="glyphicon glyphicon-cog" aria-hidden="true" (click)="isHide=!isHide"></span>
+      <input type="number" class="form-control input-sm" [(ngModel)]="period" placeholder="period"/>
+      <input type="checkbox" placeholder="autoRefresh" (click)="autoRefresh($event)"/>autoRefresh
+    </div>
+    <base-chart [config]="config"></base-chart>
+  </div>
+  <div class="col-md-2">
+    <div [ngClass]="{hide: isHide}">
+      <div class="form-group">
+        <label for="start" class="col-sm-3 control-label">start</label>
+        <div>
+          <input id="start" type="datetime-local" class="form-control" [(ngModel)]="params.start" placeholder="start"/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="end" class="col-sm-3 control-label">end</label>
+        <div>
+          <input id="end" type="datetime-local" class="form-control" [(ngModel)]="params.end" placeholder="end"/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="duration" class="col-sm-3 control-label">duration</label>
+        <div>
+          <input id="duration" type="text" class="form-control" [(ngModel)]="params.duration" placeholder="duration"/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="period" class="col-sm-3 control-label">period</label>
+        <div>
+          <input id="period" type="text" class="form-control" [(ngModel)]="params.period" placeholder="period"/>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="row">
+  <div class="form-group">
+    <label for="sqlTemplate" class="col-sm-3 control-label">sqlTemplate</label>
+    <div>
+      <input id="sqlTemplate" type="text" class="form-control" [(ngModel)]="sqlTemplate" placeholder="sqlTemplate"
+             (click)="refresh()"/>
+    </div>
+  </div>
+  <div class="form-group">
+    <select id="category" (change)="sqlTemplate=$event.target.value" class="form-control">
+      <option value='select sum(count) from "{name}" where time > now() - {duration} group by time({period})'>count-最近
+      </option>
+      <option
+        value="select sum(count) from &quot;{name}&quot; where time > '{start}' and time < '{end}' group by time({period})">
+        count-时间段
+      </option>
+    </select>
+  </div>
+  <pre>{{searchSql}}</pre>
+</div>
