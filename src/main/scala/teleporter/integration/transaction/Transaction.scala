@@ -27,7 +27,7 @@ trait Transaction[T, B] extends AutoCloseable {
 
   protected def doCommit(point: B): Unit
 
-  def tryComplete(): Boolean
+  def isComplete(): Boolean
 
   def close(): Unit = {}
 }
@@ -114,7 +114,7 @@ trait ChunkTransaction[T, B] extends Transaction[T, B] with LazyLogging {
     }
   }
 
-  def tryComplete(): Boolean = chunkQueue.size == 1 && chunkPools.unConfirmed(chunkQueue.last._1).isEmpty
+  def isComplete(): Boolean = chunkQueue.size == 1 && chunkPools.unConfirmed(chunkQueue.last._1).isEmpty
 
   override def close(): Unit = {}
 }

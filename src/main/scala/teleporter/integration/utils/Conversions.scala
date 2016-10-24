@@ -6,9 +6,9 @@ import java.time.LocalDateTime
 import scala.concurrent.duration.Duration
 
 /**
- * Author: kui.dai
- * Date: 2016/4/22.
- */
+  * Author: kui.dai
+  * Date: 2016/4/22.
+  */
 trait Conversions {
   private val NULL: String = "null"
 

@@ -46,7 +46,7 @@ class EventReceiveActor(configService: PersistentService,
       connectionKeepers -= this.currInstance
     case Complete ⇒
       self ! InstanceOffline(this.currInstance)
-      throw new RuntimeException("Error, Connection is forever!")
+      throw new RuntimeException("Error, Connection can't closed!")
     case RegisterSender(ref) ⇒ senderRef = ref
     case StartPartition(partition, instance) ⇒
       runtimeService.put(partition, Version().toJson)

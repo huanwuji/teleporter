@@ -2,7 +2,13 @@ import {Injectable} from "@angular/core";
 import {Http} from "@angular/http";
 import "rxjs/add/operator/toPromise";
 import {ConfigService, Identity} from "../../../../rest.servcie";
-import {FormItemBase, TextboxFormItem, DynamicGroupFormItem, GroupFormItem} from "../../../../dynamic/form/form-item";
+import {
+  FormItemBase,
+  TextboxFormItem,
+  DynamicGroupFormItem,
+  GroupFormItem,
+  ArrayFormItem
+} from "../../../../dynamic/form/form-item";
 
 export interface Sink extends Identity {
   key?: string;
@@ -44,6 +50,10 @@ export class SinkService extends ConfigService<Sink> {
         label: 'address',
         required: true
       }),
+      new ArrayFormItem({
+        key: 'errorRules',
+        label: 'errorRules'
+      }),
       new GroupFormItem({
         key: 'client',
         label: 'client',
@@ -72,6 +82,14 @@ export class SinkService extends ConfigService<Sink> {
   }
 
   private getDataSourceItems(): FormItemBase<any>[] {
-    return [];
+    return [
+      new TextboxFormItem({
+        key: 'parallelism',
+        label: 'parallelism',
+        type: 'number',
+        required: true,
+        value: 1
+      }),
+    ];
   }
 }

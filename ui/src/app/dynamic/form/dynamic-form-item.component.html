@@ -7,8 +7,12 @@
            [readonly]="formItem.readonly"/>
 
     <textarea *ngSwitchCase="'textarea'" [formControlName]="formItem.key" class="form-control"
-              [id]="formItem.key" placeholder="{{formItem.placeholder}}"
+              [id]="formItem.key" placeholder="{{formItem.placeholder}}" [rows]="formItem.rows"
               [readonly]="formItem.readonly"></textarea>
+
+    <input *ngSwitchCase="'checkbox'" [formControlName]="formItem.key" [id]="formItem.key" type="checkbox"
+           placeholder="{{formItem.placeholder}}"
+           [readonly]="formItem.readonly"/>
 
     <select *ngSwitchCase="'dropdown'" [formControlName]="formItem.key" class="form-control"
             [id]="formItem.key">
@@ -45,8 +49,10 @@
     </div>
 
     <div *ngSwitchCase="'array'" [formArrayName]="formItem.key">
-      <div class="col-sm-offset-8 col-sm-1">
-        <span class="btn btn-primary" (click)="dynamicItemAdd()">add</span>
+      <div class="row">
+        <div class="col-sm-2">
+          <span class="btn btn-primary" (click)="dynamicItemAdd()">add</span>
+        </div>
       </div>
       <div *ngFor="let ele of formItem.value; let i = index">
         <div class="form-group">

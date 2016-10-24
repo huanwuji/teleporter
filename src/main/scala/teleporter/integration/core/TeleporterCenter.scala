@@ -1,12 +1,17 @@
 package teleporter.integration.core
 
+import akka.Done
 import akka.actor.{ActorRef, ActorSystem, Props}
+import akka.pattern._
 import akka.stream.Materializer
 import akka.stream.scaladsl.{Sink, Source}
+import akka.util.Timeout
 import com.markatta.akron.CronTab
 import com.typesafe.config.Config
 import com.typesafe.scalalogging.LazyLogging
+import teleporter.integration.ActorTestMessages.Ping
 import teleporter.integration.cluster.instance.Brokers
+import teleporter.integration.cluster.instance.Brokers.OnConnected
 import teleporter.integration.cluster.rpc.proto.Rpc.TeleporterEvent
 import teleporter.integration.component.GitClient
 import teleporter.integration.core.TeleporterConfig._
@@ -15,7 +20,8 @@ import teleporter.integration.transaction.ChunkTransaction.ChunkTxnConfig
 import teleporter.integration.transaction.RecoveryPoint
 import teleporter.integration.utils.EventListener
 
-import scala.concurrent.duration.{Duration, FiniteDuration}
+import scala.concurrent.Future
+import scala.concurrent.duration.{Duration, FiniteDuration, _}
 
 
 /**
@@ -39,6 +45,8 @@ trait TeleporterCenter extends LazyLogging {
   def streams: ActorRef
 
   def components: Components
+
+  def config: TeleporterConfigService
 
   def defaultRecoveryPoint: RecoveryPoint[SourceConfig]
 
@@ -65,11 +73,16 @@ trait TeleporterCenter extends LazyLogging {
 
 class TeleporterCenterImpl(val instance: String)
                           (implicit val system: ActorSystem, val materializer: Materializer) extends TeleporterCenter {
+
+  import system.dispatcher
+
   var _context: TeleporterContext = _
   var _brokers: ActorRef = _
   var _streams: ActorRef = _
   var _components: Components = _
+  var _config: TeleporterConfigService = _
   var _defaultRecoveryPoint: RecoveryPoint[SourceConfig] = _
+  var _metricRegistry: MetricRegistry = _
   val _eventListener = EventListener[TeleporterEvent]()
 
   def apply(): TeleporterCenter = {
@@ -77,7 +90,9 @@ class TeleporterCenterImpl(val instance: String)
     _brokers = Brokers()
     _streams = Streams()
     _components = Components()
+    _config = TeleporterConfigService(_eventListener)
     _defaultRecoveryPoint = RecoveryPoint()
+    _metricRegistry = MetricRegistry()
     self
   }
 
@@ -89,24 +104,41 @@ class TeleporterCenterImpl(val instance: String)
 
   override def components: Components = _components
 
+  override def config: TeleporterConfigService = _config
+
   override def defaultRecoveryPoint: RecoveryPoint[SourceConfig] = _defaultRecoveryPoint
 
   override def eventListener: EventListener[TeleporterEvent] = _eventListener
 
-  override def metricsRegistry: MetricRegistry = MetricRegistry()
+  override def metricsRegistry: MetricRegistry = _metricRegistry
 
   override def gitClient: GitClient = null
 
   override def crontab: ActorRef = system.actorOf(CronTab.props, "teleporter_crontab")
 }
 
-object TeleporterCenter {
+object TeleporterCenter extends LazyLogging {
   def apply(instance: String, config: Config)(implicit system: ActorSystem, mater: Materializer): TeleporterCenter = {
+    import system.dispatcher
+    implicit val timeout: Timeout = 1.minute
     val center = new TeleporterCenterImpl(instance).apply()
     val metricsConfig = config.getConfig("metrics")
-    val (open, duration, key) = (metricsConfig.getBoolean("open"), metricsConfig.getString("key"), metricsConfig.getString("duration"))
+    val (open, key, duration) = (metricsConfig.getBoolean("open"), metricsConfig.getString("key"), metricsConfig.getString("duration"))
     if (open) {
-      center.openMetrics(key, Duration(duration).asInstanceOf[FiniteDuration])
+      // ensure connected to broker
+      (center.brokers ? OnConnected).foreach {
+        case fu: Future[Done] ⇒
+          // success connected to broker
+          fu.foreach {
+            _ ⇒
+              //load address
+              center.config.loadAddress(key).flatMap(_ ⇒ center.context.ref ? Ping /*ensure context is add to center.context*/).foreach {
+                _ ⇒
+                  logger.info(s"Metrics will open, key: $key, refresh: $duration")
+                  center.openMetrics(key, Duration(duration).asInstanceOf[FiniteDuration])
+              }
+          }
+      }
     }
     center
   }

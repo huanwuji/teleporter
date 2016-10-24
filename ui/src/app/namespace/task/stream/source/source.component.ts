@@ -103,9 +103,12 @@ export class SourceDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let source = this.formGroup.value;
-    this.payLoad = JSON.stringify(source);
     this.sourceService.save(this.fullKey(source.key), source)
       .then(v => this.location.back());
   }

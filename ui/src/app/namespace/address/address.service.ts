@@ -2,7 +2,13 @@ import {Injectable} from "@angular/core";
 import {Http} from "@angular/http";
 import "rxjs/add/operator/toPromise";
 import {ConfigService, RuntimeService, KeyBean, Identity} from "../../rest.servcie";
-import {FormItemBase, TextboxFormItem, DynamicGroupFormItem, GroupFormItem} from "../../dynamic/form/form-item";
+import {
+  FormItemBase,
+  TextboxFormItem,
+  DynamicGroupFormItem,
+  GroupFormItem,
+  CheckboxFormItem
+} from "../../dynamic/form/form-item";
 
 export interface Address extends Identity {
   ns?: string;
@@ -44,11 +50,12 @@ export class AddressService extends ConfigService<Address> {
         label: 'name',
         required: true
       }),
-      new TextboxFormItem({
+      new CheckboxFormItem({
         key: 'share',
         label: 'share',
         required: true,
-        placeholder: 'true|false'
+        placeholder: 'true|false',
+        value: false
       }),
       new GroupFormItem({
         key: 'client',
@@ -135,7 +142,7 @@ export class AddressService extends ConfigService<Address> {
 
   private getDataSourceItems() {
     return [
-      new TextboxFormItem({key: 'jdbcUrl', label: 'jdbcUrl'}),
+      new TextboxFormItem({key: 'jdbcUrl', label: 'jdbcUrl', value: 'jdbc:mysql://localhost:3306/database'}),
       new TextboxFormItem({key: 'username', label: 'username'}),
       new TextboxFormItem({key: 'password', label: 'password'}),
       new TextboxFormItem({key: 'maximumPoolSize', label: 'maximumPoolSize', type: 'number', value: 1})

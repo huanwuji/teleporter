@@ -2,7 +2,14 @@ import {Injectable} from "@angular/core";
 import {Http} from "@angular/http";
 import "rxjs/add/operator/toPromise";
 import {ConfigService, Identity} from "../../../../rest.servcie";
-import {TextboxFormItem, FormItemBase, GroupFormItem, DynamicGroupFormItem} from "../../../../dynamic/form/form-item";
+import {
+  TextboxFormItem,
+  FormItemBase,
+  GroupFormItem,
+  DynamicGroupFormItem,
+  ArrayFormItem,
+  CheckboxFormItem
+} from "../../../../dynamic/form/form-item";
 
 export interface Source extends Identity {
   key?: string;
@@ -45,10 +52,14 @@ export class SourceService extends ConfigService<Source> {
         label: 'address',
         required: true
       }),
-      new TextboxFormItem({
+      new CheckboxFormItem({
         key: 'shadow',
         label: 'shadow',
         required: true
+      }),
+      new ArrayFormItem({
+        key: 'errorRules',
+        label: 'errorRules',
       })];
     items = items.concat(this.getSourceComponentItems(category));
     items.push(new DynamicGroupFormItem({
@@ -117,7 +128,7 @@ export class SourceService extends ConfigService<Source> {
           label: 'maxBlockNum',
           required: true,
           type: 'number',
-          value: 100000
+          value: 5
         }),
         new TextboxFormItem({
           key: 'commitDelay',
@@ -130,7 +141,7 @@ export class SourceService extends ConfigService<Source> {
           label: 'transaction',
           required: true,
           type: 'number',
-          value: 10000
+          value: 1000
         })
       ]
     });
@@ -145,11 +156,10 @@ export class SourceService extends ConfigService<Source> {
         new TextboxFormItem({key: 'pageSize', label: 'pageSize'}),
         new TextboxFormItem({key: 'maxPage', label: 'maxPage'}),
         new TextboxFormItem({key: 'offset', label: 'offset'}),
-        new TextboxFormItem({key: 'deadline', label: 'deadline'}),
         new TextboxFormItem({key: 'start', label: 'start'}),
+        new TextboxFormItem({key: 'deadline', label: 'deadline'}),
         new TextboxFormItem({key: 'period', label: 'period'}),
         new TextboxFormItem({key: 'maxPeriod', label: 'maxPeriod'}),
-        new TextboxFormItem({key: 'cron', label: 'cron'})
       ]
     });
   }

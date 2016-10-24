@@ -42,9 +42,9 @@ trait EventListener[T] {
     result
   }
 
-  def resolve(seqNr: Long, result: T): Unit = events.get(seqNr).foreach(_.success(result))
+  def resolve(seqNr: Long, result: T): Unit = events.remove(seqNr).foreach(_.success(result))
 
-  def resolve(seqNr: Long, result: Try[T]): Unit = events.get(seqNr).foreach(_.tryComplete(result))
+  def resolve(seqNr: Long, result: Try[T]): Unit = events.remove(seqNr).foreach(_.tryComplete(result))
 
   def clear(): Unit = {
     events.values.foreach(_.failure(new RuntimeException("Event will clear, So some unComplete event will interrupt")))

@@ -78,9 +78,12 @@ export class BrokerDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
-  save() {
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
+  onSubmit() {
     let broker = this.formGroup.value;
-    this.payLoad = JSON.stringify(broker);
     this.brokerService.save(this.fullKey(broker.key), broker)
       .then(v => this.location.back());
   }

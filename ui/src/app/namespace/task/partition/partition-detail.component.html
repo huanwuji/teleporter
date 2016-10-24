@@ -12,12 +12,18 @@
       <df-form-item [formItem]="formItem" [form]="formGroup"></df-form-item>
     </div>
 
-    <div class="form-group">
-      <button type="submit" class="btn btn-primary">Save</button>
-      <!--<button type="submit" [disabled]="!form.valid" class="btn btn-primary">Save</button>-->
+    <div class="form-group row">
+      <div class="offset-sm-2 col-sm-1">
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+      <div class="col-sm-1">
+        <span class="btn btn-info" (click)="preview()">preview</span>
+      </div>
     </div>
+
     <div *ngIf="payLoad" class="form-group">
-      <strong>Saved the following values</strong><br>{{payLoad}}
+      <strong>Saved the following values</strong><br>
+      <pre>{{payLoad}}</pre>
     </div>
   </form>
 </div>

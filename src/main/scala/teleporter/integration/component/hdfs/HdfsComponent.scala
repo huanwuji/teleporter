@@ -42,7 +42,7 @@ object HdfsUtil extends LazyLogging {
 }
 
 object HdfsComponent extends SourceMetadata {
-  val hdfs: ClientApply[FileSystem] = (key, center) ⇒ {
+  val hdfs: ClientApply = (key, center) ⇒ {
     implicit val clientConfig = center.context.getContext[AddressContext](key).config
     val hdfsConfig = HBaseConfiguration.create()
     lnsClient.toMap.foreach { case (k: String, v: Any) ⇒ hdfsConfig.set(k, String.valueOf(v)) }

@@ -52,7 +52,7 @@ case class GitClient(username: String, password: String)
 }
 
 object GitComponent extends GitMetadata {
-  val git: ClientApply[GitClient] = (key, center) ⇒ {
+  val git: ClientApply = (key, center) ⇒ {
     import center.system
     val addressContext = center.context.getContext[AddressContext](key)
     val clientConfig = addressContext.config[MapBean]("client")

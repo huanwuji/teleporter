@@ -1,6 +1,7 @@
 package teleporter.integration.core
 
 import akka.actor.{Actor, ActorRef, Props}
+import teleporter.integration.ActorTestMessages.{Ping, Pong}
 import teleporter.integration.ClientApply
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
@@ -105,7 +106,7 @@ object ClientRefs {
 }
 
 trait ClientRefs[A] {
-  def apply(key: String, clientApply: ClientApply[A])(implicit center: TeleporterCenter): A
+  def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A
 
   def close(key: String)(implicit center: TeleporterCenter): Unit
 }
@@ -114,10 +115,10 @@ class ShareClientRefs[A] extends ClientRefs[A] {
   var clientRef: ClientRef[A] = _
   var keys: Set[String] = Set.empty
 
-  override def apply(key: String, clientApply: ClientApply[A])(implicit center: TeleporterCenter): A = {
+  override def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A = {
     synchronized {
       if (clientRef == null) {
-        clientRef = clientApply(key, center)
+        clientRef = clientApply(key, center).asInstanceOf[ClientRef[A]]
         keys = keys + key
       }
     }
@@ -140,8 +141,8 @@ class ShareClientRefs[A] extends ClientRefs[A] {
 class MultiClientRefs[A] extends ClientRefs[A] {
   val clientRefs = TrieMap[String, ClientRef[A]]()
 
-  override def apply(key: String, clientApply: ClientApply[A])(implicit center: TeleporterCenter): A = {
-    clientRefs.getOrElseUpdate(key, clientApply(key, center)).client
+  override def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A = {
+    clientRefs.getOrElseUpdate(key, clientApply(key, center).asInstanceOf[ClientRef[A]]).client
   }
 
   override def close(key: String)(implicit center: TeleporterCenter): Unit = {
@@ -170,7 +171,11 @@ trait TeleporterContext {
 class TeleporterContextImpl(val ref: ActorRef, val indexes: TwoIndexMap[Long, ComponentContext]) extends TeleporterContext
 
 class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(implicit center: TeleporterCenter) extends Actor {
-  override def receive: Receive = updateContext().orElse(triggerChange)
+  override def receive: Receive = updateContext().orElse(triggerChange).orElse(defaultReceive)
+
+  private def defaultReceive: Receive = {
+    case Ping ⇒ sender() ! Pong
+  }
 
   private def updateContext(): Receive = {
     case Upsert(ctx: ComponentContext, trigger) ⇒

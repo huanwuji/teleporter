@@ -28,7 +28,7 @@ trait SimpleHttpClient extends LazyLogging {
       .runWith(Sink.head).flatMap {
       resp ⇒
         resp.status match {
-          case StatusCodes.OK ⇒
+          case StatusCodes.OK | StatusCodes.NoContent ⇒
             m match {
               case _ if m.runtimeClass.getSimpleName == "String" ⇒ Future.successful(resp.entity.asInstanceOf[T])
               case _ ⇒ Unmarshal(resp.entity).to[T]

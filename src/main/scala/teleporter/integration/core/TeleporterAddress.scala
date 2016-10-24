@@ -13,7 +13,7 @@ import scala.collection.concurrent.TrieMap
   *
   * @author daikui
   */
-trait ClientRef[A] {
+trait ClientRef[+A] {
   val key: String
   val client: A
 }
@@ -26,14 +26,14 @@ case class AutoCloseClientRef[A <: AutoCloseable](override val key: String, over
 
 trait TeleporterAddress extends AddressMetadata {
 
-  private val clientApplies = TrieMap[String, ClientApply[Any]](
-    "kafka_producer" → KafkaComponent.kafkaProducer,
-    "kafka_consumer" → KafkaComponent.kafkaConsumer,
-    "dataSource" → DataSourceComponent.dataSource,
-    "hbase.common" → HbaseComponent.hbase,
-    "elasticsearch" → ElasticComponent.elasticClient,
-    "mongo" → MongoComponent.mongo,
-    "influxdb" → InfluxdbComponent.influxdb
+  private val clientApplies = TrieMap[String, ClientApply](
+    "kafka_producer" → KafkaComponent.kafkaProducerApply,
+    "kafka_consumer" → KafkaComponent.kafkaConsumerApply,
+    "dataSource" → DataSourceComponent.dataSourceApply,
+    "hbase.common" → HbaseComponent.hbaseApply,
+    "elasticsearch" → ElasticComponent.elasticClientApply,
+    "mongo" → MongoComponent.mongoApply,
+    "influxdb" → InfluxdbComponent.influxdbApply
   )
 
   def apply[A](key: String)(implicit center: TeleporterCenter): A = {
@@ -41,7 +41,7 @@ trait TeleporterAddress extends AddressMetadata {
     context.clientRefs(key, clientApplies(lnsCategory(context.config))).asInstanceOf[A]
   }
 
-  def registerType(category: String, factory: ClientApply[Any]): Unit = {
+  def registerType(category: String, factory: ClientApply): Unit = {
     clientApplies += category → factory
   }
 }

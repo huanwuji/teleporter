@@ -47,7 +47,7 @@ class InfluxdbReporter(key: String, period: FiniteDuration)(implicit val center:
   def report(name: String, data: Map[String, Any], timestamp: Long): Unit = {
     val dto = InfluxDto(name, data, System.currentTimeMillis())
     client.save(dto).onComplete {
-      case Failure(e) ⇒ logger.error(e.getLocalizedMessage)
+      case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
       case _ ⇒
     }
   }

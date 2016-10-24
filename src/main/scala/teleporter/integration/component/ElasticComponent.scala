@@ -176,7 +176,7 @@ object ElasticComponent extends ElasticAddressMetadata with AddressMetadata {
                            modified: Option[Date],
                            op: ElasticAction.Value)
 
-  val elasticClient: ClientApply[TransportClient] = (key, center) ⇒ {
+  def elasticClientApply: ClientApply = (key, center) ⇒ {
     implicit val config = center.context.getContext[AddressContext](key).config
     val clientConfig = lnsClient
     val settings = ImmutableSettings.settingsBuilder().put("cluster.name", clientConfig[String](FClusterName)).build()

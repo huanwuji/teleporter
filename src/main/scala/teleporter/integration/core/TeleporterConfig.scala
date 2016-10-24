@@ -58,22 +58,21 @@ trait AddressMetadata extends ConfigMetadata {
 }
 
 trait SourceMetadata extends ConfigMetadata {
-  val FShareAddressInstance = "shareAddressInstance"
   val FClient = "client"
   val FShadow = "shadow"
 
   def lnsClient(implicit bean: MapBean): MapBean = bean.__dict__[MapBean](FClient).getOrElse(MapBean.empty)
 
-  def lnsShareAddressInstance(implicit bean: MapBean): Boolean = bean.__dict__[Boolean](FShareAddressInstance).exists(b ⇒ b)
-
   def lnsShadow(implicit bean: MapBean): Boolean = bean.__dict__[Boolean](FShadow).exists(b ⇒ b)
 }
 
 trait SinkMetadata extends ConfigMetadata {
-  val FPrototype = "prototype"
-  val FParallelism = "parallelism"
+  val FClient = "client"
+  val FClientParallelism = "parallelism"
 
-  def lnsParallelism(implicit bean: MapBean): Int = bean[Int](FParallelism)
+  def lnsClient(implicit bean: MapBean): MapBean = bean.__dict__[MapBean](FClient).getOrElse(MapBean.empty)
+
+  def lnsParallelism(implicit bean: MapBean): Int = lnsClient.__dict__[Int](FClientParallelism).getOrElse(0)
 }
 
 trait VariableMetadata extends ConfigMetadata
@@ -245,7 +244,7 @@ trait TeleporterConfigService {
     getConfig(key).map { kv ⇒
       val km = kv.config
       val addressId = km.value[Long]("id")
-      val share = km.value[Boolean]("share")
+      val share = km.value.__dict__[Boolean]("share").getOrElse(false)
       val addressContext = AddressContext(id = addressId, key = km.key, config = km.value, linkKeys = Set.empty, variableKeys = Set.empty, clientRefs = ClientRefs(share))
       center.context.ref ! Upsert(addressContext, trigger)
       addressContext

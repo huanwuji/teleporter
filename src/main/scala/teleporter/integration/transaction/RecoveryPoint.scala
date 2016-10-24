@@ -31,8 +31,8 @@ class DefaultRecoveryPoint()(implicit center: TeleporterCenter) extends Recovery
     val sourceContext = center.context.getContext[SourceContext](key)
     val kv = AtomicKV.newBuilder()
       .setKey(key)
-      .setExpect(Jackson.mapper.writeValueAsString(sourceContext.config))
-      .setUpdate(Jackson.mapper.writeValueAsString(point))
+      .setExpect(Jackson.mapper.writeValueAsString(sourceContext.config.toMap))
+      .setUpdate(Jackson.mapper.writeValueAsString(point.toMap))
       .build()
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(TeleporterEvent.newBuilder()

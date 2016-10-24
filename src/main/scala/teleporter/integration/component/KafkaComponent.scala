@@ -36,7 +36,7 @@ object KafkaComponent extends AddressMetadata {
 
   case class KafkaLocation(topicPartition: TopicPartition, offset: Long)
 
-  val kafkaProducer: ClientApply[KafkaProducer[Array[Byte], Array[Byte]]] = (key, center) ⇒ {
+  def kafkaProducerApply: ClientApply = (key, center) ⇒ {
     implicit val config = center.context.getContext[AddressContext](key).config
     val props = new Properties()
     lnsClient.toMap.foreach {
@@ -48,7 +48,7 @@ object KafkaComponent extends AddressMetadata {
     AutoCloseClientRef(key, new KafkaProducer[Array[Byte], Array[Byte]](props))
   }
 
-  val kafkaConsumer: ClientApply[ZkKafkaConsumerConnector] = (key, center) ⇒ {
+  def kafkaConsumerApply: ClientApply = (key, center) ⇒ {
     implicit val config = center.context.getContext[AddressContext](key).config
     val props = new Properties()
     lnsClient.toMap.foreach {
@@ -106,7 +106,7 @@ class KafkaPublisher(override val key: String)(implicit val center: TeleporterCe
     with Component
     with LazyLogging {
   implicit val sourceContext = center.context.getContext[SourceContext](key)
-  val counter = center.metricsRegistry.counter(sourceContext.key)
+  val counter = center.metricsRegistry.counter(key)
   val zkConnector = center.components.address[ZkKafkaConsumerConnector](sourceContext.addressKey)
   val kafkaStreamWorkers = {
     var totalThreads = 0

@@ -24,7 +24,7 @@
     </tr>
     <tr *ngFor="let kb of kbs; let i = index">
       <td>
-        <a [routerLink]="[kb.value.key]">{{kb.value.key}}</a>
+        <a [routerLink]="[kb.value.key]">{{kb.key}}</a>
       </td>
       <td>{{kb.value.name}}</td>
       <td>

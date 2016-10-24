@@ -49,7 +49,7 @@ class MongoPublisher(override val key: String)(implicit val center: TeleporterCe
 }
 
 object MongoComponent extends AddressMetadata with MongoAddressMetadata {
-  val mongo: ClientApply[MongoClient] = (key, center) ⇒ {
+  def mongoApply: ClientApply = (key, center) ⇒ {
     val config = center.context.getContext[AddressContext](key).config
     val mongoClient = MongoClient(config[String](FClient, FUrl))
     new AutoCloseClientRef[MongoClient](key, mongoClient)

@@ -84,10 +84,13 @@ export class VariableDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let variable = this.formGroup.value;
-    this.payLoad = JSON.stringify(variable);
-    this.variableService.save(this.fullKey(variable), variable)
+    this.variableService.save(this.fullKey(variable.key), variable)
       .then(v => this.location.back());
   }
 

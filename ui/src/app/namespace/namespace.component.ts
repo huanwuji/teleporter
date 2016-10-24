@@ -66,10 +66,13 @@ export class NamespaceDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let namespace = this.formGroup.value;
-    this.payLoad = JSON.stringify(namespace);
-    this.namespaceService.save(this.fullKey(namespace), namespace)
+    this.namespaceService.save(this.fullKey(namespace.key), namespace)
       .then(v => this.location.back());
   }
 

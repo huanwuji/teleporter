@@ -109,7 +109,7 @@ case class ExceptionRule(errorMatch: Regex, handler: ExceptionHandler)
 
 object ExceptionRule extends ErrorRuleMetadata {
   //stream.start(1.minutes, 3)
-  val actionMatch = "(\\w+\\.\\w+)(\\(([\\w.]+)(,\\s+(\\d+))?\\))?".r
+  val actionMatch = "\\s+(\\w+\\.\\w+)(\\(([\\w.]+)(,\\s+(\\d+))?\\))?".r
   val ALL_MATCH = ".".r
 
   def apply(streamKey: String, errorMatch: String, cmd: String): ExceptionRule = {
@@ -153,7 +153,7 @@ class Enforcer(key: String, rules: Seq[ExceptionRule], defaultHandler: Exception
 object Enforcer extends ConfigMetadata with LazyLogging {
   /**
     * *: restart|stop
-    * runtimeException: restart|stop|retry|restart(1.seconds)
+    * runtimeException => stream.restart|stop|retry|restart(1.seconds)
     * regex: handler
     * Unknown column: stop
     */
@@ -163,10 +163,10 @@ object Enforcer extends ConfigMetadata with LazyLogging {
       case sinkContext: SinkContext ⇒ sinkContext.stream
     }
     val streamKey = stream.key
-    val errorRules = config.__dict__[String](FErrorRules)
-    val rules = errorRules.map(_.split("[\r\n]").map(_.split(",")).map {
-      case Array(errorMatch, action) ⇒ ExceptionRule(streamKey, errorMatch, action)
-    }).getOrElse(Array.empty)
+    val errorRules = config.__dicts__[String](FErrorRules)
+    val rules = errorRules.map(_.split("=>")).map {
+      case Array(errorMatch, action) ⇒ ExceptionRule(streamKey, errorMatch.trim, action)
+    }
     new Enforcer(key, rules, new ExceptionHandler.Stream.StreamCommand(streamKey, Streams.DelayCommand(Stop(streamKey))))
   }
 }

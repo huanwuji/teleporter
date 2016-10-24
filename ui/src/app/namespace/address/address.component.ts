@@ -93,9 +93,12 @@ export class AddressDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let address = this.formGroup.value;
-    this.payLoad = JSON.stringify(address);
     this.addressService.save(this.fullKey(address.key), address)
       .then(v => this.location.back());
   }

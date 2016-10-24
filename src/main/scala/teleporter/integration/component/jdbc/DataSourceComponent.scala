@@ -42,7 +42,7 @@ class JdbcPublisher(override val key: String)(implicit override val center: Tele
 
   @throws[Exception](classOf[Exception])
   override def postStop(): Unit = {
-    logger.info("jdbc publisher was stop")
+    logger.info(s"$key jdbc publisher was stop")
     resourceClose()
   }
 }
@@ -65,7 +65,7 @@ class JdbcSubscriber(val key: String)(implicit val center: TeleporterCenter) ext
 }
 
 object DataSourceComponent extends AddressMetadata {
-  val dataSource: ClientApply[HikariDataSource] = (key, center) ⇒ {
+  def dataSourceApply: ClientApply = (key, center) ⇒ {
     val config = center.context.getContext[AddressContext](key).config
     val props = new Properties()
     lnsClient(config).toMap.foreach {

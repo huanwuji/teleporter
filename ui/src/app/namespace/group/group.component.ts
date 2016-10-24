@@ -78,9 +78,12 @@ export class GroupDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
-  save() {
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
+  onSubmit() {
     let group = this.formGroup.value;
-    this.payLoad = JSON.stringify(group);
     this.groupService.save(this.fullKey(group.key), group)
       .then(v => this.location.back());
   }

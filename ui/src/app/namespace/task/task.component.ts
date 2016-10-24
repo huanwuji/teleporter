@@ -78,9 +78,12 @@ export class TaskDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let task = this.formGroup.value;
-    this.payLoad = JSON.stringify(task);
     this.taskService.save(this.fullKey(task.key), task)
       .then(v => this.location.back());
   }

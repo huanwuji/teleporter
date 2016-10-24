@@ -113,7 +113,7 @@ trait KuduMetadata extends AddressMetadata {
 }
 
 object KuduComponent extends KuduMetadata {
-  val kuduClient: ClientApply[KuduDataSource] = (key, center) ⇒ {
+  val kuduClient: ClientApply = (key, center) ⇒ {
     val addressContext = center.context.getContext[AddressContext](key)
     val clientConfig = lnsClient(addressContext.config)
     val client: KuduClient = new KuduClient.KuduClientBuilder(clientConfig[String](KUDU_MASTER).toString).build

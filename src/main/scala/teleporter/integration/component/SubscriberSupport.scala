@@ -44,6 +44,7 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
   implicit val sinkConfig = sinkContext.config
   val parallelism = lnsParallelism
   var submitSize = 0
+  val counter = center.metricsRegistry.counter(key)
 
   override protected val requestStrategy: RequestStrategy = RequestStrategyManager(autoStart = false)
   val requestStrategyManager = requestStrategy.asInstanceOf[RequestStrategyManager]
@@ -91,6 +92,7 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
     case onNext: OnNext ⇒
       submitSize += 1
       router ! onNext
+      counter.inc()
     case Success(onNext) ⇒ submitSize -= 1
     case failure@Failure(onNext, e, count) ⇒
       if (sender() == self) {

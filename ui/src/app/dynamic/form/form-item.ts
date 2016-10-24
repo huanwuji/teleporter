@@ -34,6 +34,7 @@ export class ControlType {
   static dropdown = 'dropdown';
   static textbox = 'textbox';
   static textarea = 'textarea';
+  static checkbox = 'checkbox';
 }
 
 export class GroupFormItem extends FormItemBase<FormItemBase<any>[]> {
@@ -85,9 +86,21 @@ export class TextboxFormItem extends FormItemBase<string> {
 export class TextareaFormItem extends FormItemBase<string> {
   controlType = ControlType.textarea;
   type: string;
+  rows: number;
 
   constructor(options: {} = {}) {
     super(options);
     this.type = options['type'] || '';
+    this.rows = options['rows'] || 10;
+  }
+}
+
+export class CheckboxFormItem extends FormItemBase<string> {
+  controlType = ControlType.checkbox;
+  type: string;
+
+  constructor(options: {} = {}) {
+    super(options);
+    this.type = 'checkbox';
   }
 }

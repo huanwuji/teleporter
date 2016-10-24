@@ -1,9 +1,9 @@
 package teleporter.integration.utils
 
 /**
- * Author: kui.dai
- * Date: 2016/6/27.
- */
+  * Author: kui.dai
+  * Date: 2016/6/27.
+  */
 trait MapBean extends Converters with Convert {
   val underlying: Map[String, Any]
 
@@ -24,7 +24,7 @@ trait MapBean extends Converters with Convert {
   }
 
   def apply[A](paths: String*)(implicit converter: Converter[A]): A = {
-    this.__dict__[A](paths:_*).get
+    this.__dict__[A](paths: _*).get
   }
 
   def ++(kv: (String, Any)*): Map[String, Any] = underlying ++ kv
@@ -35,7 +35,7 @@ trait MapBean extends Converters with Convert {
 
   private val _upperCaseReg = """[A-Z]""".r
 
-  def camel2Point: Map[String, Any] = underlying.foldLeft(Map[String,Any]()) {
+  def camel2Point: Map[String, Any] = underlying.foldLeft(Map[String, Any]()) {
     (m, entry) ⇒ m + (_upperCaseReg.replaceAllIn(entry._1, "." + _.toString().toLowerCase) → entry._2)
   }
 
@@ -46,7 +46,7 @@ trait MapBean extends Converters with Convert {
       case Nil ⇒ bean ++ kv
       case _ ⇒
         val head = path.head
-        bean + (head → traversalUpdate(bean.getOrElse(head, Map[String,Any]()).asInstanceOf[Map[String, Any]], path.tail, kv: _*))
+        bean + (head → traversalUpdate(bean.getOrElse(head, Map[String, Any]()).asInstanceOf[Map[String, Any]], path.tail, kv: _*))
     }
   }
 

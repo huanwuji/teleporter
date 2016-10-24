@@ -84,9 +84,12 @@ export class StreamDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let stream = this.formGroup.value;
-    this.payLoad = JSON.stringify(stream);
     this.streamService.save(this.fullKey(stream.key), stream)
       .then(v => this.location.back());
   }

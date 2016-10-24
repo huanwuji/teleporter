@@ -37,7 +37,7 @@ case class HbaseTmp(tableName: String, row: String, family: String, colummns: Se
 case class Column(columnName: String, colmnValue: String)
 
 object HbaseComponent {
-  val hbase: ClientApply[Connection] = (key, center) ⇒ {
+  def hbaseApply: ClientApply = (key, center) ⇒ {
     val hBaseConfig = HBaseConfiguration.create()
     AutoCloseClientRef(key, ConnectionFactory.createConnection(hBaseConfig))
   }

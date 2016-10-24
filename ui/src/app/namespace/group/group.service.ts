@@ -42,8 +42,8 @@ export class GroupService extends ConfigService<Group> {
       new TextboxFormItem({
         key: 'instanceOfflineReBalanceTime',
         label: 'instanceOfflineReBalanceTime',
-        type: 'number',
-        required: true
+        required: true,
+        value: 'Inf'
       }),
     ];
   }

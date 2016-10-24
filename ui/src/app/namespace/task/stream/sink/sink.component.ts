@@ -97,9 +97,12 @@ export class SinkDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let sink = this.formGroup.value;
-    this.payLoad = JSON.stringify(sink);
     this.sinkService.save(this.fullKey(sink.key), sink)
       .then(v => this.location.back());
   }

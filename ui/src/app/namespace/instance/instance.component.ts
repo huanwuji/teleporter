@@ -103,9 +103,12 @@ export class InstanceDetailComponent implements OnInit {
     this.formGroup = form.formGroup;
   }
 
+  preview() {
+    this.payLoad = JSON.stringify(this.formGroup.value, null, '\t');
+  }
+
   onSubmit() {
     let instance = this.formGroup.value;
-    this.payLoad = JSON.stringify(instance);
     this.instanceService.save(this.fullKey(instance.key), instance)
       .then(v => this.location.back());
   }

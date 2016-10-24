@@ -84,13 +84,13 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with LazyLoggi
   def destroy(): Unit = {
     if (logTailer != null) {
       logTailer.queue.cancel()
+      checkSchedule.cancel()
     }
   }
 
   @scala.throws[Exception](classOf[Exception])
   override def postStop(): Unit = {
     this.destroy()
-    checkSchedule.cancel()
   }
 }
 

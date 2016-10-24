@@ -2,12 +2,14 @@ package teleporter.integration.cluster.instance
 
 import java.net.{InetAddress, InetSocketAddress}
 
+import akka.Done
 import akka.actor.{Actor, ActorRef, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.client.RequestBuilding
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Framing, Keep, Sink, Source, Tcp}
 import akka.util.ByteString
+import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.cluster.broker.PersistentProtocol.Values.BrokerValue
 import teleporter.integration.cluster.broker.PersistentProtocol.{KeyBean, KeyValue, Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.{CreateConnection, _}
@@ -16,12 +18,12 @@ import teleporter.integration.cluster.rpc.proto.TeleporterRpc
 import teleporter.integration.cluster.rpc.proto.TeleporterRpc._
 import teleporter.integration.cluster.rpc.proto.broker.Broker.LinkInstance
 import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify
+import teleporter.integration.core.TeleporterCenter
 import teleporter.integration.core.TeleporterContext.Remove
-import teleporter.integration.core.{TeleporterCenter, TeleporterConfigService}
 import teleporter.integration.utils.SimpleHttpClient
 
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
+import scala.concurrent.{ExecutionContext, Promise}
 import scala.util.{Failure, Random, Success}
 
 /**
@@ -34,6 +36,7 @@ class Brokers()(implicit center: TeleporterCenter) extends Actor with SimpleHttp
 
   private var brokerConnections = Map[String, BrokerConnection]()
   private var brokerLeader: BrokerConnection = _
+  private val connected = Promise[Done]()
 
   override def receive: Receive = {
     case LoaderBroker(b) ⇒ loadBrokers(b)
@@ -99,8 +102,10 @@ class Brokers()(implicit center: TeleporterCenter) extends Actor with SimpleHttp
               .build().toByteString
           ).build()
       }
+      connected.trySuccess(Done)
     case SendMessage(event) ⇒
       brokerLeader.senderRef ! event
+    case OnConnected ⇒ sender() ! connected
   }
 
   def loadBrokers(brokers: String)(implicit ec: ExecutionContext): Unit = {
@@ -125,11 +130,10 @@ class Brokers()(implicit center: TeleporterCenter) extends Actor with SimpleHttp
   }
 }
 
-class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends Actor {
+class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends Actor with LazyLogging {
 
-  import context.dispatcher
+  import center.system.dispatcher
 
-  var configService: TeleporterConfigService = _
   var senderRef: ActorRef = _
   val logTrace = context.actorOf(Props(classOf[LogTrace], center))
 
@@ -138,7 +142,6 @@ class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends 
     case Complete ⇒ throw new RuntimeException("Error, Connection is forever!")
     case RegisterSender(ref) ⇒
       this.senderRef = ref
-      this.configService = TeleporterConfigService(center.eventListener)
     case event: TeleporterEvent ⇒
       if (event.getRole == TeleporterEvent.Role.CLIENT) {
         center.eventListener.resolve(event.getSeqNr, event)
@@ -161,15 +164,20 @@ class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends 
       logTrace ! event
   }
 
+  def errorLog: PartialFunction[Throwable, Unit] = {
+    case e: Throwable ⇒ logger.error(e.getMessage, e)
+  }
+
   def upsertChanged(notify: ConfigChangeNotify) = {
     val key = notify.getKey
+    val config = center.config
     Keys.table(key) match {
-      case Tables.partition ⇒ configService.loadPartition(key)
-      case Tables.stream ⇒ configService.loadStream(key)
-      case Tables.task ⇒ configService.loadTask(key)
-      case Tables.source ⇒ configService.loadSource(key)
-      case Tables.sink ⇒ configService.loadSink(key)
-      case Tables.address ⇒ configService.loadAddress(key)
+      case Tables.partition ⇒ config.loadPartition(key).onFailure(errorLog)
+      case Tables.stream ⇒ config.loadStream(key).onFailure(errorLog)
+      case Tables.task ⇒ config.loadTask(key).onFailure(errorLog)
+      case Tables.source ⇒ config.loadSource(key).onFailure(errorLog)
+      case Tables.sink ⇒ config.loadSink(key).onFailure(errorLog)
+      case Tables.address ⇒ config.loadAddress(key).onFailure(errorLog)
     }
   }
 }
@@ -177,6 +185,8 @@ class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends 
 object Brokers {
 
   case object Complete
+
+  case object OnConnected
 
   case class SendMessage(event: TeleporterEvent)
 

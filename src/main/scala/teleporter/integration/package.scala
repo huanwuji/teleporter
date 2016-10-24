@@ -7,5 +7,14 @@ import teleporter.integration.core.{ClientRef, TeleporterCenter}
   * Date: 2015/12/4.
   */
 package object integration {
-  type ClientApply[A] = ((String, TeleporterCenter) ⇒ ClientRef[A])
+  type ClientApply = ((String, TeleporterCenter) ⇒ ClientRef[Any])
+
+  object ActorTestMessages {
+
+    case object Ping
+
+    case object Pong
+
+  }
+
 }

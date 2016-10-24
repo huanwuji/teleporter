@@ -62,7 +62,7 @@ object InfluxdbClient {
 }
 
 object InfluxdbComponent extends InfluxdbMetadata with AddressMetadata {
-  val influxdb: ClientApply[InfluxdbClient] = (key, center) ⇒ {
+  def influxdbApply: ClientApply = (key, center) ⇒ {
     import center.system
     implicit val config = center.context.getContext[AddressContext](key).config
     val clientConfig = lnsClient
