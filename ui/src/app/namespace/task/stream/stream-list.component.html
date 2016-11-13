@@ -23,6 +23,7 @@
       <th>name</th>
       <th>source</th>
       <th>sink</th>
+      <th>status</th>
       <th><a class="btn btn-primary" [routerLink]="['add']">add</a></th>
     </tr>
     <tr *ngFor="let kb of kbs">
@@ -33,7 +34,14 @@
       <td><a [routerLink]="['/source', ns, task, kb.value.key]">{{kb.value.key}}</a></td>
       <td><a [routerLink]="['/sink', ns, task, kb.value.key]">{{kb.value.key}}</a></td>
       <td>
-        <span (click)="refresh()">🔁</span>&nbsp;<span (click)="del(kb.key)">❎</span>
+        <div [ngSwitch]="kb.value.status">
+          <span *ngSwitchCase="'NORMAL'" class="text-primary">{{kb.value.status}}</span>
+          <span *ngSwitchCase="'REMOVE'" class="text-danger">{{kb.value.status}}</span>
+          <span *ngSwitchCase="'COMPLETE'" class="text-success">{{kb.value.status}}</span>
+        </div>
+      </td>
+      <td>
+        <span (click)="refresh(kb.key)">🔁</span>&nbsp;<span (click)="del(kb.key)">❎</span>
       </td>
     </tr>
     </tbody>

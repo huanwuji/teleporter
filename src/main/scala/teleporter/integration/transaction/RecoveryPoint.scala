@@ -3,11 +3,12 @@ package teleporter.integration.transaction
 import com.typesafe.scalalogging.LazyLogging
 import kafka.common.TopicAndPartition
 import kafka.javaapi.consumer.ZkKafkaConsumerConnector
+import teleporter.integration.cluster.broker.PersistentProtocol.Keys
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.rpc.proto.Rpc.{AtomicKV, EventType, TeleporterEvent}
 import teleporter.integration.component.KafkaComponent.KafkaLocation
 import teleporter.integration.core.TeleporterConfig.SourceConfig
-import teleporter.integration.core.{SourceContext, TeleporterCenter}
+import teleporter.integration.core._
 import teleporter.integration.utils.Jackson
 
 /**
@@ -43,7 +44,23 @@ class DefaultRecoveryPoint()(implicit center: TeleporterCenter) extends Recovery
     }
   }
 
-  override def complete(key: String): Unit = {}
+  override def complete(key: String): Unit = {
+    val streamKey = Keys.mapping(key, Keys.SOURCE, Keys.STREAM)
+    val streamConfig = center.context.getContext[StreamContext](key).config
+    val targetStreamConfig = streamConfig ++ (StreamMetadata.FStatus → StreamStatus.COMPLETE)
+    val kv = AtomicKV.newBuilder()
+      .setKey(streamKey)
+      .setExpect(Jackson.mapper.writeValueAsString(streamConfig.toMap))
+      .setUpdate(Jackson.mapper.writeValueAsString(targetStreamConfig))
+      .build()
+    center.eventListener.asyncEvent { seqNr ⇒
+      center.brokers ! SendMessage(TeleporterEvent.newBuilder()
+        .setRole(TeleporterEvent.Role.CLIENT)
+        .setSeqNr(seqNr)
+        .setType(EventType.AtomicSaveKV)
+        .setBody(kv.toByteString).build())
+    }
+  }
 }
 
 class EmptyRecoveryPoint[T] extends RecoveryPoint[T] {

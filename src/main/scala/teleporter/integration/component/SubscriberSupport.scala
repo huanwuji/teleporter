@@ -7,6 +7,7 @@ import akka.stream.actor.{ActorSubscriber, MaxInFlightRequestStrategy, RequestSt
 import teleporter.integration.component.SubscriberMessage.{ClientInit, Failure, Success}
 import teleporter.integration.component.jdbc.SqlSupport
 import teleporter.integration.core._
+import teleporter.integration.metrics.Metrics.{Measurement, Tags}
 
 import scala.collection.mutable
 
@@ -14,37 +15,37 @@ import scala.collection.mutable
   * Author: kui.dai
   * Date: 2016/3/25.
   */
-class SubscriberWorker(handler: SubscriberHandler[Any]) extends Actor {
+trait SubscriberWorker[A] extends Actor {
+  val client: A
 
   override def receive: Actor.Receive = {
-    case onNext: OnNext ⇒ handle(onNext, () ⇒ sender() ! Success(onNext))
-    case failure@Failure(onNext, _, _) ⇒ handle(onNext, () ⇒ sender() ! failure.copy(nrOfRetries = failure.nrOfRetries + 1))
+    case onNext: OnNext ⇒ handle(onNext, e ⇒ sender() ! Failure(onNext, e))
+    case failure@Failure(onNext, _, _) ⇒ handle(onNext, e ⇒ sender() ! failure.copy(throwable = e, nrOfRetries = failure.nrOfRetries + 1))
   }
 
-  def handle(onNext: OnNext, failureHandle: () ⇒ Unit): Unit = {
+  def handle(onNext: OnNext): Unit
+
+  protected def handle(onNext: OnNext, failureHandle: Throwable ⇒ Unit): Unit = {
     try {
-      handler.handle(onNext)
+      handle(onNext)
       sender() ! Success(onNext)
     } catch {
-      case e: Exception ⇒ failureHandle()
+      case e: Exception ⇒ failureHandle(e)
     }
   }
 }
 
-trait SubscriberHandler[A] {
-  val client: A
-
-  def handle(onNext: OnNext): Unit
-}
-
 trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSupport with SinkMetadata {
-  implicit val center: TeleporterCenter
 
+  import context.dispatcher
+
+  implicit val center: TeleporterCenter
   implicit val sinkContext = center.context.getContext[SinkContext](key)
   implicit val sinkConfig = sinkContext.config
   val parallelism = lnsParallelism
   var submitSize = 0
-  val counter = center.metricsRegistry.counter(key)
+  val counter = center.metricsRegistry.counter(Measurement(key, Seq(Tags.success)))
+  protected var enforcer: Enforcer = _
 
   override protected val requestStrategy: RequestStrategy = RequestStrategyManager(autoStart = false)
   val requestStrategyManager = requestStrategy.asInstanceOf[RequestStrategyManager]
@@ -68,15 +69,21 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
     case ClientInit ⇒
       try {
         val sinkContext = center.context.getContext[SinkContext](key)
+        enforcer = Enforcer(key, sinkConfig)
         client = center.components.address[A](sinkContext.addressKey)
         router = context.actorOf(BalancingPool(parallelism).props(workProps))
-        requestStrategyManager.autoRequestStrategy(new MaxInFlightRequestStrategy(max = parallelism * 4) {
+        requestStrategyManager.autoRequestStrategy(new MaxInFlightRequestStrategy(max = parallelism * 16) {
+
+          override def batchSize: Int = parallelism * 8
+
           override def inFlightInternally: Int = submitSize
         })
         requestResume()
         context.become(customReceive)
       } catch {
-        case e: Exception ⇒ requestStrategyManager.stop()
+        case e: Exception ⇒
+          requestStrategyManager.stop()
+          enforcer.execute(e)
       }
     case x ⇒ logger.warn(s"can't arrived, $x")
   }
@@ -84,7 +91,7 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
   private def requestResume(): Unit = {
     if (requestStrategyManager.isPause) {
       requestStrategyManager.start()
-      request(remainingRequested)
+      request(requestStrategy.requestDemand(remainingRequested))
     }
   }
 
@@ -98,9 +105,8 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
       if (sender() == self) {
         router ! failure
       } else {
-
+        enforcer.execute(e, failure)
       }
-    case x ⇒ logger.warn(s"can't arrived, $x")
   }: Receive).orElse(signalReceive)
 
   def signalReceive: Receive = {
@@ -110,7 +116,8 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
     case OnError(e) ⇒
       context.stop(self)
       sinkContext.address().clientRefs.close(key)
-      logger.error(s"$key error", e);
+      enforcer.execute(e)
+    case x ⇒ logger.warn(s"can't arrived, $x")
   }
 
   @throws[Exception](classOf[Exception])
@@ -118,9 +125,7 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
     logger.info(s"$key will stop")
   }
 
-  def workProps: Props = Props(classOf[SubscriberWorker], createHandler)
-
-  def createHandler: SubscriberHandler[A]
+  def workProps: Props
 }
 
 object SubscriberMessage {
@@ -131,6 +136,6 @@ object SubscriberMessage {
 
   case class Success(onNext: OnNext) extends Action
 
-  case class Failure(onNext: OnNext, throwable: Throwable, nrOfRetries: Int = 0) extends Action
+  case class Failure(onNext: OnNext, throwable: Throwable, nrOfRetries: Int = 1) extends Action
 
 }

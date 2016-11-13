@@ -1,6 +1,7 @@
 package teleporter.integration.core
 
 import akka.actor.{Actor, ActorRef, Props}
+import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.ActorTestMessages.{Ping, Pong}
 import teleporter.integration.ClientApply
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys
@@ -111,13 +112,14 @@ trait ClientRefs[A] {
   def close(key: String)(implicit center: TeleporterCenter): Unit
 }
 
-class ShareClientRefs[A] extends ClientRefs[A] {
+class ShareClientRefs[A] extends ClientRefs[A] with LazyLogging {
   var clientRef: ClientRef[A] = _
   var keys: Set[String] = Set.empty
 
   override def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A = {
     synchronized {
       if (clientRef == null) {
+        logger.info(s"create share address $key")
         clientRef = clientApply(key, center).asInstanceOf[ClientRef[A]]
         keys = keys + key
       }
@@ -130,7 +132,9 @@ class ShareClientRefs[A] extends ClientRefs[A] {
       keys = keys - key
       if (keys.isEmpty) {
         clientRef match {
-          case client: AutoCloseClientRef[A] ⇒ client.close()
+          case client: AutoCloseClientRef[A] ⇒
+            client.close()
+            logger.info(s"close share client $key")
           case _ ⇒ //Nothing to do
         }
       }
@@ -138,16 +142,19 @@ class ShareClientRefs[A] extends ClientRefs[A] {
   }
 }
 
-class MultiClientRefs[A] extends ClientRefs[A] {
+class MultiClientRefs[A] extends ClientRefs[A] with LazyLogging {
   val clientRefs = TrieMap[String, ClientRef[A]]()
 
   override def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A = {
+    logger.info(s"create multi address $key")
     clientRefs.getOrElseUpdate(key, clientApply(key, center).asInstanceOf[ClientRef[A]]).client
   }
 
   override def close(key: String)(implicit center: TeleporterCenter): Unit = {
     clientRefs.remove(key).foreach {
-      case client: AutoCloseClientRef[A] ⇒ client.close()
+      case client: AutoCloseClientRef[A] ⇒
+        client.close()
+        logger.info(s"close multi client $key")
       case _ ⇒ //Nothing to do
     }
   }
@@ -179,10 +186,15 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
 
   private def updateContext(): Receive = {
     case Upsert(ctx: ComponentContext, trigger) ⇒
-      if (indexes.getKey1(ctx.id).isDefined) {
-        self ! Update(ctx, trigger)
-      } else {
-        self ! Add(ctx, trigger)
+      ctx match {
+        case streamContext: StreamContext if StreamMetadata.lnsStatus(streamContext.config) != StreamStatus.NORMAL ⇒
+          self ! Remove(ctx, trigger)
+        case _ ⇒
+          if (indexes.getKey1(ctx.id).isDefined) {
+            self ! Update(ctx, trigger)
+          } else {
+            self ! Add(ctx, trigger)
+          }
       }
     case Add(ctx: ComponentContext, trigger) ⇒
       indexes += (ctx.id, ctx.key, ctx)
@@ -269,7 +281,7 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
               .setBody(
                 LinkAddress.newBuilder()
                   .setAddress(ctx.key)
-                  .setInstance(center.instance)
+                  .setInstance(center.instanceKey)
                   .addAllKeys(ctx.linkKeys.asJava)
                   .setTimestamp(System.currentTimeMillis())
                   .build().toByteString
@@ -285,7 +297,7 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
               .setBody(
                 LinkVariable.newBuilder()
                   .setVariableKey(ctx.key)
-                  .setInstance(center.instance)
+                  .setInstance(center.instanceKey)
                   .addAllKeys(ctx.linkKeys.asJava)
                   .build().toByteString
               )

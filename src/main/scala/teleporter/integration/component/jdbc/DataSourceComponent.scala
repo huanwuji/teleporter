@@ -3,6 +3,7 @@ package teleporter.integration.component.jdbc
 import java.util.Properties
 import javax.sql.DataSource
 
+import akka.actor.Props
 import akka.stream.actor.ActorSubscriberMessage.OnNext
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import teleporter.integration._
@@ -29,7 +30,7 @@ class JdbcPublisher(override val key: String)(implicit override val center: Tele
 
   override protected def grab(config: MapBean): Future[Iterator[JdbcMessage]] = {
     Future {
-      val namedSql = NameSql(config[String](FClient, FSql), config[MapBean](FClient).toMap)
+      val namedSql = NameSql(config[String](FClient, FSql), config[MapBean](FSchedule).toMap)
       sqlResult = bulkQueryToMap(client.getConnection, PreparedSql(namedSql))
       sqlResult.result
     }
@@ -47,7 +48,7 @@ class JdbcPublisher(override val key: String)(implicit override val center: Tele
   }
 }
 
-class JdbcSubscriberHandler(val client: DataSource) extends SubscriberHandler[DataSource] with SqlSupport {
+class JdbcSubscriberWork(val client: DataSource) extends SubscriberWorker[DataSource] with SqlSupport {
   override def handle(onNext: OnNext): Unit = {
     onNext.element match {
       case ele: TeleporterJdbcRecord ⇒
@@ -61,7 +62,7 @@ class JdbcSubscriberHandler(val client: DataSource) extends SubscriberHandler[Da
 }
 
 class JdbcSubscriber(val key: String)(implicit val center: TeleporterCenter) extends SubscriberSupport[DataSource] {
-  override def createHandler: SubscriberHandler[DataSource] = new JdbcSubscriberHandler(client)
+  override def workProps: Props = Props(classOf[JdbcSubscriberWork], client)
 }
 
 object DataSourceComponent extends AddressMetadata {

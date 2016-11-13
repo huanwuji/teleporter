@@ -4,6 +4,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 import com.google.common.base.Stopwatch
+import teleporter.integration.metrics.Metrics.{Count, Measurement, Time}
 
 import scala.collection.concurrent.TrieMap
 
@@ -11,9 +12,28 @@ import scala.collection.concurrent.TrieMap
   * Author: kui.dai
   * Date: 2015/12/10.
   */
-case class Count(count: Long, start: Long, end: Long)
+trait Metrics[T] {
+  def dump(): T
+}
 
-case class Time(count: Long, totalSpend: Long, min: Long, max: Long)
+object Metrics {
+
+  case class Count(count: Long, start: Long, end: Long)
+
+  case class Time(count: Long, totalSpend: Long, min: Long, max: Long)
+
+  case class Tag(key: String, value: String)
+
+  object Tags {
+    val success = Tag("status", "SUCCESS")
+    val error = Tag("status", "ERROR")
+  }
+
+  case class Measurement(name: String, tags: Seq[Tag] = Seq.empty) {
+    val str = s"$name${if (tags.isEmpty) "" else "," + tags.map(tag ⇒ s"${tag.key}=${tag.value}").mkString(",")}"
+  }
+
+}
 
 object MetricsImplicits {
   implicit def count2Map(count: Count): Map[String, Any] = Map(
@@ -28,10 +48,6 @@ object MetricsImplicits {
     "min" → time.min,
     "max" → time.max
   )
-}
-
-trait Metrics[T] {
-  def dump(): T
 }
 
 class MetricsCounter extends Metrics[Count] {
@@ -83,11 +99,11 @@ class MetricsTimer extends Metrics[Time] {
 }
 
 class MetricRegistry {
-  val metrics = TrieMap[String, Any]()
+  val metrics = TrieMap[Measurement, Any]()
 
-  def counter(name: String): MetricsCounter = metrics.getOrElseUpdate(name, new MetricsCounter).asInstanceOf[MetricsCounter]
+  def counter(measurement: Measurement): MetricsCounter = metrics.getOrElseUpdate(measurement, new MetricsCounter).asInstanceOf[MetricsCounter]
 
-  def timer(name: String): MetricsTimer = metrics.getOrElseUpdate(name, new MetricsTimer).asInstanceOf[MetricsTimer]
+  def timer(measurement: Measurement): MetricsTimer = metrics.getOrElseUpdate(measurement, new MetricsTimer).asInstanceOf[MetricsTimer]
 }
 
 object MetricRegistry {

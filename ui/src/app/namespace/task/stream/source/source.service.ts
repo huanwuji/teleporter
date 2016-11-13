@@ -110,18 +110,19 @@ export class SourceService extends ConfigService<Source> {
       key: 'transaction',
       label: 'transaction',
       value: [
+        new CheckboxFormItem({
+          key: 'recoveryPointEnabled',
+          label: 'recoveryPointEnabled',
+          required: true,
+          type: 'number',
+          value: true
+        }),
         new TextboxFormItem({
           key: 'channelSize',
           label: 'channelSize',
           required: true,
           type: 'number',
           value: 1
-        }),
-        new TextboxFormItem({
-          key: 'maxAge',
-          label: 'maxAge',
-          required: true,
-          value: '1.minutes'
         }),
         new TextboxFormItem({
           key: 'maxBlockNum',
@@ -131,17 +132,29 @@ export class SourceService extends ConfigService<Source> {
           value: 5
         }),
         new TextboxFormItem({
+          key: 'blockSize',
+          label: 'blockSize',
+          required: true,
+          type: 'number',
+          value: 500
+        }),
+        new TextboxFormItem({
+          key: 'maxAge',
+          label: 'maxAge',
+          required: true,
+          value: '1.minutes'
+        }),
+        new CheckboxFormItem({
+          key: 'timeoutRetry',
+          label: 'timeoutRetry',
+          required: true,
+          value: true
+        }),
+        new TextboxFormItem({
           key: 'commitDelay',
           label: 'commitDelay',
           placeholder: '1.minutes',
-          required: true,
-        }),
-        new TextboxFormItem({
-          key: 'transaction',
-          label: 'transaction',
-          required: true,
-          type: 'number',
-          value: 1000
+          required: true
         })
       ]
     });
@@ -152,11 +165,12 @@ export class SourceService extends ConfigService<Source> {
       key: 'schedule',
       label: 'schedule',
       value: [
-        new TextboxFormItem({key: 'page', label: 'page'}),
-        new TextboxFormItem({key: 'pageSize', label: 'pageSize'}),
-        new TextboxFormItem({key: 'maxPage', label: 'maxPage'}),
-        new TextboxFormItem({key: 'offset', label: 'offset'}),
+        new TextboxFormItem({key: 'page', label: 'page', type: 'number'}),
+        new TextboxFormItem({key: 'pageSize', label: 'pageSize', type: 'number'}),
+        new TextboxFormItem({key: 'maxPage', label: 'maxPage', type: 'number'}),
+        new TextboxFormItem({key: 'offset', label: 'offset', readonly: true, type: 'number'}),
         new TextboxFormItem({key: 'start', label: 'start'}),
+        new TextboxFormItem({key: 'end', label: 'end', readonly: true}),
         new TextboxFormItem({key: 'deadline', label: 'deadline'}),
         new TextboxFormItem({key: 'period', label: 'period'}),
         new TextboxFormItem({key: 'maxPeriod', label: 'maxPeriod'}),

@@ -46,7 +46,7 @@ export class InstanceListComponent implements OnInit {
   }
 
   executorCmd(instance: string) {
-    var ws = new WebSocket(`/log?instance=${instance}`);
+    var ws = new WebSocket(`ws://${window.location.host}/log?instance=${instance}`);
     let requests = 10;
     let requestLogs = () => {
       while (requests > 0) {

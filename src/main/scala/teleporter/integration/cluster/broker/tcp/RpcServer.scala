@@ -1,8 +1,9 @@
 package teleporter.integration.cluster.broker.tcp
 
 import akka.actor.{Actor, ActorRef, Props, Status}
+import akka.event.Logging
 import akka.stream.scaladsl.{Framing, Sink, Source, Tcp}
-import akka.stream.{ActorMaterializer, OverflowStrategy}
+import akka.stream.{ActorMaterializer, Attributes, OverflowStrategy}
 import akka.util.ByteString
 import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys
@@ -256,38 +257,19 @@ object RpcServer extends LazyLogging {
     import system.dispatcher
     Tcp().bind(host, port, idleTimeout = 2.minutes).to(Sink.foreach {
       connection ⇒
-        println(s"New connection from: ${connection.remoteAddress}")
+        logger.info(s"New connection from: ${connection.remoteAddress}")
         val eventReceiver = system.actorOf(Props(classOf[EventReceiveActor], configService, runtimeService, connectionKeepers, eventListener))
         try {
           Source.actorRef[TeleporterEvent](1000, OverflowStrategy.fail)
-            .map { m ⇒
-              println(
-                s"""
-                   |1111111111111111111111111
-                   |${m.getSeqNr}
-                   |${m.getRole}
-                   |${m.getStatus}
-                   |${m.getType}
-                   |${m.getBody.toStringUtf8}
-            """.stripMargin)
-              ByteString(m.toByteArray)
-            }
+            .log("server-receive")
+            .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
+            .map(m ⇒ ByteString(m.toByteArray))
             .watchTermination() { case (ref, fu) ⇒ eventReceiver ! RegisterSender(ref); fu }
             .via(Framing.simpleFramingProtocol(10 * 1024 * 1024).join(connection.flow))
             .filter(_.nonEmpty)
-            .map(bs ⇒ {
-              val aa = TeleporterEvent.parseFrom(bs.toArray)
-              println(
-                s"""
-                   |22222222222222222222222
-                   |${aa.getSeqNr}
-                   |${aa.getRole}
-                   |${aa.getStatus}
-                   |${aa.getType}
-                   |${aa.getBody.toStringUtf8}
-             """.stripMargin)
-              aa
-            })
+            .map(bs ⇒ TeleporterEvent.parseFrom(bs.toArray))
+            .log("server-response")
+            .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
             .to(Sink.actorRef(eventReceiver, Complete)).run().onComplete {
             r ⇒ logger.warn(s"Connection was closed, $r")
           }

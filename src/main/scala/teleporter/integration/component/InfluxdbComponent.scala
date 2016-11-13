@@ -10,6 +10,7 @@ import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration._
 import teleporter.integration.component.Influxdb.InfluxdbServer
 import teleporter.integration.core.{AddressContext, AddressMetadata, AutoCloseClientRef}
+import teleporter.integration.metrics.Metrics.Measurement
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.SimpleHttpClient
 
@@ -29,17 +30,17 @@ trait InfluxdbMetadata {
   val FDb = "db"
 }
 
-case class InfluxDto(key: String, data: Map[String, Any], timestamp: Long)
+case class InfluxDto(measurement: Measurement, data: Map[String, Any], timestamp: Long)
 
 trait InfluxdbClient extends SimpleHttpClient with AutoCloseable with LazyLogging {
   implicit val influxServer: InfluxdbServer
   val dbName: String
 
   def save(dto: InfluxDto)(implicit mater: Materializer, ec: ExecutionContext): Future[String] = {
-    simpleRequest[String](RequestBuilding.Post(s"/write?db=$dbName", writeData(dto.key, dto.data, dto.timestamp)))
+    simpleRequest[String](RequestBuilding.Post(s"/write?db=$dbName", writeData(dto.measurement, dto.data, dto.timestamp)))
   }
 
-  private def writeData(key: String, data: Map[String, Any], timestamp: Long): String = {
+  private def writeData(measurement: Measurement, data: Map[String, Any], timestamp: Long): String = {
     val fields = data.mapValues {
       case x: Int ⇒ s"${x}i"
       case x: Short ⇒ s"${x}i"
@@ -49,7 +50,7 @@ trait InfluxdbClient extends SimpleHttpClient with AutoCloseable with LazyLoggin
       case str: String ⇒ s""""$str""""
       case x ⇒ logger.warn(s"$x, UnSupport influxdb write data type" + x.getClass)
     }.map(entry ⇒ s"${entry._1}=${entry._2}").mkString(",")
-    s"$key $fields"
+    s"${measurement.str} $fields"
   }
 
   override def close(): Unit = {}

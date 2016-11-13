@@ -8,11 +8,11 @@ import akka.stream.scaladsl.{Sink, Source}
   * Date: 2016/7/4.
   */
 trait Component {
+  implicit def center: TeleporterCenter
+
   val key: String
 
   def id(): Long = center.context.getContext[ComponentContext](key).id
-
-  implicit val center: TeleporterCenter
 }
 
 object Component {

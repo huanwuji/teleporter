@@ -3,18 +3,18 @@ package teleporter.integration.core
 import akka.Done
 import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.pattern._
-import akka.stream.Materializer
 import akka.stream.scaladsl.{Sink, Source}
+import akka.stream.{ActorMaterializer, Materializer}
 import akka.util.Timeout
 import com.markatta.akron.CronTab
-import com.typesafe.config.Config
+import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.ActorTestMessages.Ping
 import teleporter.integration.cluster.instance.Brokers
-import teleporter.integration.cluster.instance.Brokers.OnConnected
 import teleporter.integration.cluster.rpc.proto.Rpc.TeleporterEvent
 import teleporter.integration.component.GitClient
 import teleporter.integration.core.TeleporterConfig._
+import teleporter.integration.core.TeleporterConfigActor.LoadAddress
 import teleporter.integration.metrics.{InfluxdbReporter, MetricRegistry}
 import teleporter.integration.transaction.ChunkTransaction.ChunkTxnConfig
 import teleporter.integration.transaction.RecoveryPoint
@@ -36,7 +36,7 @@ trait TeleporterCenter extends LazyLogging {
 
   implicit val materializer: Materializer
 
-  val instance: String
+  val instanceKey: String
 
   def context: TeleporterContext
 
@@ -46,7 +46,7 @@ trait TeleporterCenter extends LazyLogging {
 
   def components: Components
 
-  def config: TeleporterConfigService
+  def configRef: ActorRef
 
   def defaultRecoveryPoint: RecoveryPoint[SourceConfig]
 
@@ -69,31 +69,48 @@ trait TeleporterCenter extends LazyLogging {
   def sink[T](id: Long): Sink[T, ActorRef] = components.sink[T](id)
 
   def sink[T](key: String): Sink[T, ActorRef] = components.sink[T](key)
+
+  def start(): Future[Done]
 }
 
-class TeleporterCenterImpl(val instance: String)
+class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config: Config)
                           (implicit val system: ActorSystem, val materializer: Materializer) extends TeleporterCenter {
-
-  import system.dispatcher
-
+  implicit val timeout: Timeout = 1.minute
   var _context: TeleporterContext = _
   var _brokers: ActorRef = _
   var _streams: ActorRef = _
   var _components: Components = _
-  var _config: TeleporterConfigService = _
+  var _configRef: ActorRef = _
   var _defaultRecoveryPoint: RecoveryPoint[SourceConfig] = _
   var _metricRegistry: MetricRegistry = _
   val _eventListener = EventListener[TeleporterEvent]()
 
-  def apply(): TeleporterCenter = {
+  override def start(): Future[Done] = {
+    import system.dispatcher
     _context = TeleporterContext()
-    _brokers = Brokers()
     _streams = Streams()
     _components = Components()
-    _config = TeleporterConfigService(_eventListener)
+    _configRef = TeleporterConfigActor(_eventListener)
     _defaultRecoveryPoint = RecoveryPoint()
     _metricRegistry = MetricRegistry()
-    self
+    val (brokerRef, connected) = Brokers(seedBrokers)
+    _brokers = brokerRef
+    connected.map {
+      done ⇒
+        val metricsConfig = config.getConfig("metrics")
+        val (open, key, duration) = (metricsConfig.getBoolean("open"), metricsConfig.getString("key"), metricsConfig.getString("duration"))
+        if (open) {
+          //load address
+          (this.configRef ? LoadAddress(key))
+            .flatMap(_ ⇒ this.context.ref ? Ping /*ensure context is add to center.context*/)
+            .foreach {
+              _ ⇒
+                logger.info(s"Metrics will open, key: $key, refresh: $duration")
+                this.openMetrics(key, Duration(duration).asInstanceOf[FiniteDuration])
+            }
+        }
+        done
+    }
   }
 
   override def context: TeleporterContext = _context
@@ -104,7 +121,7 @@ class TeleporterCenterImpl(val instance: String)
 
   override def components: Components = _components
 
-  override def config: TeleporterConfigService = _config
+  override def configRef: ActorRef = _configRef
 
   override def defaultRecoveryPoint: RecoveryPoint[SourceConfig] = _defaultRecoveryPoint
 
@@ -118,28 +135,12 @@ class TeleporterCenterImpl(val instance: String)
 }
 
 object TeleporterCenter extends LazyLogging {
-  def apply(instance: String, config: Config)(implicit system: ActorSystem, mater: Materializer): TeleporterCenter = {
-    import system.dispatcher
-    implicit val timeout: Timeout = 1.minute
-    val center = new TeleporterCenterImpl(instance).apply()
-    val metricsConfig = config.getConfig("metrics")
-    val (open, key, duration) = (metricsConfig.getBoolean("open"), metricsConfig.getString("key"), metricsConfig.getString("duration"))
-    if (open) {
-      // ensure connected to broker
-      (center.brokers ? OnConnected).foreach {
-        case fu: Future[Done] ⇒
-          // success connected to broker
-          fu.foreach {
-            _ ⇒
-              //load address
-              center.config.loadAddress(key).flatMap(_ ⇒ center.context.ref ? Ping /*ensure context is add to center.context*/).foreach {
-                _ ⇒
-                  logger.info(s"Metrics will open, key: $key, refresh: $duration")
-                  center.openMetrics(key, Duration(duration).asInstanceOf[FiniteDuration])
-              }
-          }
-      }
-    }
-    center
+  def apply(config: Config = ConfigFactory.load("instance")): TeleporterCenter = {
+    implicit val system = ActorSystem("instance", config)
+    implicit val mater = ActorMaterializer()
+
+    val instanceConfig = config.getConfig("teleporter")
+    val (instanceKey, seedBrokers) = (instanceConfig.getString("key"), instanceConfig.getString("brokers"))
+    new TeleporterCenterImpl(instanceKey, seedBrokers, config)
   }
 }

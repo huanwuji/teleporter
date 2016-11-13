@@ -5,9 +5,12 @@ import akka.stream.actor.ActorSubscriberMessage.OnNext
 import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.component.{ScheduleActorPublisherMessage, SubscriberMessage}
 import teleporter.integration.core.Streams.{DelayCommand, Stop}
+import teleporter.integration.metrics.Metrics.{Measurement, Tag, Tags}
+import teleporter.integration.metrics.MetricsCounter
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{MapBean, MapMetadata}
 
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util.matching.Regex
@@ -105,14 +108,14 @@ object ExceptionHandler {
 
 }
 
-case class ExceptionRule(errorMatch: Regex, handler: ExceptionHandler)
+case class ExceptionRule(errorMatch: Regex, level: String, handler: ExceptionHandler)
 
 object ExceptionRule extends ErrorRuleMetadata {
   //stream.start(1.minutes, 3)
   val actionMatch = "\\s+(\\w+\\.\\w+)(\\(([\\w.]+)(,\\s+(\\d+))?\\))?".r
   val ALL_MATCH = ".".r
 
-  def apply(streamKey: String, errorMatch: String, cmd: String): ExceptionRule = {
+  def apply(streamKey: String, errorMatch: String, level: String, cmd: String): ExceptionRule = {
     val handler: ExceptionHandler = cmd match {
       case actionMatch(action, _, delay, _, retries, _*) ⇒
         val delayDuration: Duration = delay match {
@@ -132,25 +135,32 @@ object ExceptionRule extends ErrorRuleMetadata {
         }
       case _ ⇒ new ExceptionHandler.Stream.StreamCommand(streamKey, Streams.DelayCommand(Stop(streamKey)))
     }
-    ExceptionRule(errorMatch.r, handler)
+    ExceptionRule(errorMatch.r, level, handler)
   }
 }
 
 class Enforcer(key: String, rules: Seq[ExceptionRule], defaultHandler: ExceptionHandler)(implicit center: TeleporterCenter) extends LazyLogging {
+  val errorMetrics = mutable.HashMap[String, MetricsCounter]()
+  val defaultMetrics = center.metricsRegistry.counter(Measurement(key, Seq(Tags.error, Tag("level", "INFO"))))
+
   def execute(cause: Throwable, message: Any = None)(implicit self: ActorRef, center: TeleporterCenter, ec: ExecutionContext): Unit = {
-    logger.error(s"${cause.getMessage}", cause)
+    logger.error(s"$key, ${cause.getMessage}", cause)
     rules.find(r ⇒ r.errorMatch.findFirstIn(cause.getMessage).isDefined || r.errorMatch.findFirstIn(cause.getClass.getName).isDefined) match {
       case Some(rule) ⇒
         logger.info(s"Use handler $key: $defaultHandler")
+        errorMetrics.getOrElseUpdate(rule.level, center.metricsRegistry.counter(Measurement(key, Seq(Tag("level", rule.level))))).inc()
         rule.handler.handle(key, cause, message)
       case None ⇒
         logger.info(s"Use default handler $key: $defaultHandler")
+        defaultMetrics.inc()
         defaultHandler.handle(key, cause, message)
     }
   }
 }
 
 object Enforcer extends ConfigMetadata with LazyLogging {
+  val ruleMatch = "(.*)(:(DEBUG|INFO|WARN|ERROR))?\\s*=>\\s*(.*)".r
+
   /**
     * *: restart|stop
     * runtimeException => stream.restart|stop|retry|restart(1.seconds)
@@ -164,8 +174,8 @@ object Enforcer extends ConfigMetadata with LazyLogging {
     }
     val streamKey = stream.key
     val errorRules = config.__dicts__[String](FErrorRules)
-    val rules = errorRules.map(_.split("=>")).map {
-      case Array(errorMatch, action) ⇒ ExceptionRule(streamKey, errorMatch.trim, action)
+    val rules = errorRules.map {
+      case ruleMatch(errorMatch, _, level, action) ⇒ ExceptionRule(streamKey, errorMatch, level, action)
     }
     new Enforcer(key, rules, new ExceptionHandler.Stream.StreamCommand(streamKey, Streams.DelayCommand(Stop(streamKey))))
   }

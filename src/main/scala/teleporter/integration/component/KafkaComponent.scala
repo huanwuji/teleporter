@@ -4,7 +4,7 @@ import java.util.Properties
 
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.actor.ActorPublisherMessage.Request
-import akka.stream.actor.ActorSubscriberMessage.{OnComplete, OnError, OnNext}
+import akka.stream.actor.ActorSubscriberMessage.OnNext
 import akka.stream.actor._
 import com.google.protobuf.{ByteString ⇒ GByteString}
 import com.typesafe.scalalogging.LazyLogging
@@ -15,7 +15,9 @@ import teleporter.integration._
 import teleporter.integration.component.KafkaComponent.{KafkaLocation, TopicPartition}
 import teleporter.integration.component.KafkaExchanger.InnerAddress
 import teleporter.integration.component.ShadowPublisher.Register
+import teleporter.integration.component.SubscriberMessage.Success
 import teleporter.integration.core._
+import teleporter.integration.metrics.Metrics.{Measurement, Tag, Tags}
 import teleporter.integration.metrics.MetricsCounter
 import teleporter.integration.protocol.proto.KafkaBuf.{KafkaProto, KafkaProtos}
 import teleporter.integration.transaction._
@@ -106,7 +108,7 @@ class KafkaPublisher(override val key: String)(implicit val center: TeleporterCe
     with Component
     with LazyLogging {
   implicit val sourceContext = center.context.getContext[SourceContext](key)
-  val counter = center.metricsRegistry.counter(key)
+  val counter = center.metricsRegistry.counter(Measurement(key, Seq(Tags.success)))
   val zkConnector = center.components.address[ZkKafkaConsumerConnector](sourceContext.addressKey)
   val kafkaStreamWorkers = {
     var totalThreads = 0
@@ -227,7 +229,7 @@ class KafkaStreamWorker(val key: String,
           message ⇒
             val topicPartition = TopicPartition(message.topic, message.partition)
             metrics.getOrElseUpdate(topicPartition, {
-              center.metricsRegistry.counter(s"$key:${topicPartition.topic}:${topicPartition.partition}")
+              center.metricsRegistry.counter(Measurement(key, Seq(Tags.success, Tag("topic", topicPartition.topic), Tag("partition", topicPartition.partition.toString))))
             }).inc()
             locations.put(topicPartition, KafkaLocation(topicPartition, message.offset))
         }
@@ -238,40 +240,27 @@ class KafkaStreamWorker(val key: String,
   }
 }
 
-class KafkaSubscriber(override val key: String)(implicit val center: TeleporterCenter)
-  extends ActorSubscriber
-    with Component with LazyLogging {
-  val sinkContext = center.context.getContext[SinkContext](key)
-  override protected val requestStrategy: RequestStrategy = RequestStrategyManager(true)
-  val producer = center.components.address[Producer[Array[Byte], Array[Byte]]](sinkContext.addressKey)
-  val counter = center.metricsRegistry.counter(sinkContext.key)
+class KafkaSubscriberWork(val client: Producer[Array[Byte], Array[Byte]]) extends SubscriberWorker[Producer[Array[Byte], Array[Byte]]] {
 
-
-  @scala.throws[Exception](classOf[Exception])
-  override def preStart(): Unit = {
-    super.preStart()
-  }
-
-  override def receive: Actor.Receive = {
-    case OnNext(element: TeleporterKafkaRecord) ⇒
-      producer.send(element.data, new Callback() {
-        override def onCompletion(metadata: RecordMetadata, exception: Exception): Unit = {
-          counter.inc()
-          if (exception != null) {
-            logger.error(exception.getLocalizedMessage, exception)
-          } else {
-            element.toNext(element)
-          }
+  override protected def handle(onNext: OnNext, failureHandle: Throwable ⇒ Unit): Unit = {
+    val record = onNext.element.asInstanceOf[TeleporterKafkaRecord]
+    client.send(record.data, new Callback() {
+      override def onCompletion(metadata: RecordMetadata, exception: Exception): Unit = {
+        if (exception != null) {
+          failureHandle(exception)
+        } else {
+          record.toNext(record)
+          sender() ! Success(onNext)
         }
-      })
-    case OnComplete ⇒ context.stop(self)
-    case OnError(e) ⇒ logger.error(s"$key error", e); context.stop(self)
+      }
+    })
   }
 
-  @throws[Exception](classOf[Exception])
-  override def postStop(): Unit = {
-    logger.info(s"kafka subscriber $key will stop")
-  }
+  override def handle(onNext: OnNext): Unit = {}
+}
+
+class KafkaSubscriber(override val key: String)(implicit val center: TeleporterCenter) extends SubscriberSupport[Producer[Array[Byte], Array[Byte]]] {
+  override def workProps: Props = Props(classOf[KafkaSubscriberWork], client)
 }
 
 object KafkaProtoData {

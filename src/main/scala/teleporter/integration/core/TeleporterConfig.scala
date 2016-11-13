@@ -1,6 +1,9 @@
 package teleporter.integration.core
 
+import akka.actor.{Actor, ActorRef, Props}
 import akka.dispatch.Futures
+import akka.pattern._
+import akka.util.Timeout
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
 import teleporter.integration.cluster.broker.PersistentProtocol.Values.PartitionValue
 import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys}
@@ -12,7 +15,8 @@ import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{EventListener, MapBean, MapMetadata}
 
 import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.Future
+import scala.concurrent.duration._
 
 /**
   * Author: kui.dai
@@ -47,9 +51,18 @@ object TaskMetadata extends TaskMetadata
 
 trait StreamMetadata extends ConfigMetadata {
   val FTemplate = "template"
+  val FStatus = "status"
+
+  def lnsStatus(implicit bean: MapBean): String = bean[String](FStatus)
 }
 
 object StreamMetadata extends StreamMetadata
+
+object StreamStatus {
+  val NORMAL = "NORMAL"
+  val REMOVE = "REMOVE"
+  val COMPLETE = "COMPLETE"
+}
 
 trait AddressMetadata extends ConfigMetadata {
   val FClient = "client"
@@ -85,8 +98,6 @@ trait TeleporterConfig extends MapBean {
 class TeleporterConfigImpl(val underlying: Map[String, Any]) extends TeleporterConfig
 
 object TeleporterConfig {
-  implicit def apply(bean: Map[String, Any]): TeleporterConfig = new TeleporterConfigImpl(bean)
-
   type TaskConfig = TeleporterConfig
   type PartitionConfig = TeleporterConfig
   type StreamConfig = TeleporterConfig
@@ -94,24 +105,67 @@ object TeleporterConfig {
   type SourceConfig = TeleporterConfig
   type SinkConfig = TeleporterConfig
   type VariableConfig = TeleporterConfig
+
+  implicit def apply(bean: Map[String, Any]): TeleporterConfig = new TeleporterConfigImpl(bean)
 }
 
-trait TeleporterConfigService {
-  val eventListener: EventListener[TeleporterEvent]
-  val center: TeleporterCenter
-  implicit val ec: ExecutionContext
+object TeleporterConfigActor {
 
-  def loadPartition(key: String, trigger: Boolean = true): Future[PartitionContext] = {
+  case class LoadPartition(key: String, trigger: Boolean = true)
+
+  case class LoadTask(key: String, trigger: Boolean = true)
+
+  case class LoadStream(key: String, trigger: Boolean = true)
+
+  case class LoadStreams(key: String, trigger: Boolean = true)
+
+  case class LoadSource(key: String, trigger: Boolean = true)
+
+  case class LoadSources(key: String, trigger: Boolean = true)
+
+  case class LoadSink(key: String, trigger: Boolean = true)
+
+  case class LoadSinks(key: String, trigger: Boolean = true)
+
+  case class LoadAddress(key: String, trigger: Boolean = true)
+
+  def apply(eventListener: EventListener[TeleporterEvent])
+           (implicit center: TeleporterCenter): ActorRef = {
+    center.system.actorOf(Props(classOf[TeleporterConfigActor], eventListener, center), "teleporter-config")
+  }
+}
+
+class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
+                           (implicit center: TeleporterCenter) extends Actor {
+
+  import TeleporterConfigActor._
+  import context.dispatcher
+
+  implicit val timeout: Timeout = 2.minutes
+
+  override def receive: Receive = {
+    case LoadPartition(key, trigger) ⇒ loadPartition(key, trigger) pipeTo sender()
+    case LoadTask(key, trigger) ⇒ loadTask(key, trigger) pipeTo sender()
+    case LoadStream(key, trigger) ⇒ loadStream(key, trigger) pipeTo sender()
+    case LoadStreams(key, trigger) ⇒ loadStreams(key, trigger) pipeTo sender()
+    case LoadSource(key, trigger) ⇒ loadSource(key, trigger) pipeTo sender()
+    case LoadSources(key, trigger) ⇒ loadSources(key, trigger) pipeTo sender()
+    case LoadSink(key, trigger) ⇒ loadSink(key, trigger) pipeTo sender()
+    case LoadSinks(key, trigger) ⇒ loadSinks(key, trigger) pipeTo sender()
+    case LoadAddress(key, trigger) ⇒ loadAddress(key, trigger) pipeTo sender()
+  }
+
+  private def loadPartition(key: String, trigger: Boolean = true): Future[PartitionContext] = {
     getConfig(key).flatMap { kv ⇒
       val kb = kv.keyBean[PartitionValue]
       val partitionId = kb.value.id
       val partitionContext = PartitionContext(id = partitionId, key = kb.key, config = kb.value)
       val tasKey = Keys.mapping(key, PARTITION, TASK)
       for {
-        task ← loadTask(tasKey, trigger = false)
+        task ← self ? LoadTask(tasKey, trigger = false)
         streamContext ← Futures.sequence(kb.value.keys.map {
-          key ⇒ loadStreams(key, trigger = false)
-        }.asJava, ec).map(_.asScala.flatten)
+          key ⇒ (self ? LoadStreams(key, trigger = false)).asInstanceOf[Future[Seq[StreamContext]]]
+        }.asJava, dispatcher).map(_.asScala.flatten)
       } yield {
         center.context.ref ! Upsert(partitionContext, trigger)
         partitionContext
@@ -119,7 +173,7 @@ trait TeleporterConfigService {
     }
   }
 
-  def loadTask(key: String, trigger: Boolean = true): Future[TaskContext] = {
+  private def loadTask(key: String, trigger: Boolean = true): Future[TaskContext] = {
     getConfig(key).map { kv ⇒
       val km = kv.config
       val taskId = km.value[Long]("id")
@@ -129,14 +183,14 @@ trait TeleporterConfigService {
     }
   }
 
-  def loadStream(key: String, trigger: Boolean = true): Future[StreamContext] = {
+  private def loadStream(key: String, trigger: Boolean = true): Future[StreamContext] = {
     getConfig(key).flatMap { kv ⇒
       val km = kv.config
       val streamId = km.value[Long]("id")
       val streamContext = StreamContext(id = streamId, key = km.key, config = km.value, variableKeys = Set.empty)
       for {
-        sourceContexts ← loadSources(Keys.mapping(key, STREAM, STREAM_SOURCES), trigger = false)
-        sinkContexts ← loadSinks(Keys.mapping(key, STREAM, STREAM_SINKS), trigger = false)
+        sourceContexts ← self ? LoadSources(Keys.mapping(key, STREAM, STREAM_SOURCES), trigger = false)
+        sinkContexts ← self ? LoadSinks(Keys.mapping(key, STREAM, STREAM_SINKS), trigger = false)
       } yield {
         center.context.ref ! Upsert(streamContext, trigger)
         streamContext
@@ -144,25 +198,25 @@ trait TeleporterConfigService {
     }
   }
 
-  def loadStreams(key: String, trigger: Boolean = true): Future[Seq[StreamContext]] = {
+  private def loadStreams(key: String, trigger: Boolean = true): Future[Seq[StreamContext]] = {
     getRangeRegexConfig(key).flatMap { kvs ⇒
       val streamContexts = kvs.map { kv ⇒
         val km = kv.config
         val streamId = km.value[Long]("id")
         val streamContext = StreamContext(id = streamId, key = km.key, config = km.value, variableKeys = Set.empty)
         for {
-          sourceContexts ← loadSources(Keys.mapping(kv.key, STREAM, STREAM_SOURCES), trigger = false)
-          sinkContexts ← loadSinks(Keys.mapping(kv.key, STREAM, STREAM_SINKS), trigger = false)
+          sourceContexts ← self ? LoadSources(Keys.mapping(kv.key, STREAM, STREAM_SOURCES), trigger = false)
+          sinkContexts ← self ? LoadSinks(Keys.mapping(kv.key, STREAM, STREAM_SINKS), trigger = false)
         } yield {
           center.context.ref ! Upsert(streamContext, trigger)
           streamContext
         }
       }
-      Futures.sequence(streamContexts.asJava, ec)
+      Futures.sequence(streamContexts.asJava, dispatcher)
     }.map(_.asScala.toSeq)
   }
 
-  def loadSource(key: String, trigger: Boolean = true): Future[SourceContext] = {
+  private def loadSource(key: String, trigger: Boolean = true): Future[SourceContext] = {
     getConfig(key).flatMap { kv ⇒
       val km = kv.config
       val sourceId = km.value[Long]("id")
@@ -170,7 +224,7 @@ trait TeleporterConfigService {
       km.value.__dict__[String]("address") match {
         case Some(addressKey) ⇒
           for {
-            addressContext ← loadAddress(sourceContext.addressKey, trigger = false)
+            addressContext ← self ? LoadAddress(sourceContext.addressKey, trigger = false)
           } yield {
             center.context.ref ! Upsert(sourceContext, trigger)
             sourceContext
@@ -180,7 +234,7 @@ trait TeleporterConfigService {
     }
   }
 
-  def loadSources(key: String, trigger: Boolean = true): Future[Seq[SourceContext]] = {
+  private def loadSources(key: String, trigger: Boolean = true): Future[Seq[SourceContext]] = {
     getRangeRegexConfig(key).flatMap { kvs ⇒
       val sourceContexts = kvs.map { kv ⇒
         val km = kv.config
@@ -189,7 +243,7 @@ trait TeleporterConfigService {
         km.value.__dict__[String]("address") match {
           case Some(addressKey) ⇒
             for {
-              addressContext ← loadAddress(sourceContext.addressKey, trigger = false)
+              addressContext ← self ? LoadAddress(sourceContext.addressKey, trigger = false)
             } yield {
               center.context.ref ! Upsert(sourceContext, trigger)
               sourceContext
@@ -197,11 +251,11 @@ trait TeleporterConfigService {
           case None ⇒ Future.successful(sourceContext)
         }
       }
-      Futures.sequence(sourceContexts.asJava, ec)
+      Futures.sequence(sourceContexts.asJava, dispatcher)
     }.map(_.asScala.toSeq)
   }
 
-  def loadSink(key: String, trigger: Boolean = true): Future[SinkContext] = {
+  private def loadSink(key: String, trigger: Boolean = true): Future[SinkContext] = {
     getConfig(key).flatMap { kv ⇒
       val km = kv.config
       val sinkId = km.value[Long]("id")
@@ -209,7 +263,7 @@ trait TeleporterConfigService {
       km.value.__dict__[String]("address") match {
         case Some(addressKey) ⇒
           for {
-            addressContext ← loadAddress(sinkContext.addressKey, trigger = false)
+            addressContext ← self ? LoadAddress(sinkContext.addressKey, trigger = false)
           } yield {
             center.context.ref ! Upsert(sinkContext, trigger)
             sinkContext
@@ -219,7 +273,7 @@ trait TeleporterConfigService {
     }
   }
 
-  def loadSinks(key: String, trigger: Boolean = true): Future[Seq[SinkContext]] = {
+  private def loadSinks(key: String, trigger: Boolean = true): Future[Seq[SinkContext]] = {
     getRangeRegexConfig(key).flatMap { kvs ⇒
       val sinkContexts = kvs.map { kv ⇒
         val km = kv.config
@@ -228,7 +282,7 @@ trait TeleporterConfigService {
         km.value.__dict__[String]("address") match {
           case Some(addressKey) ⇒
             for {
-              addressContext ← loadAddress(sinkContext.addressKey, trigger = false)
+              addressContext ← self ? LoadAddress(sinkContext.addressKey, trigger = false)
             } yield {
               center.context.ref ! Upsert(sinkContext, trigger)
               sinkContext
@@ -236,11 +290,11 @@ trait TeleporterConfigService {
           case None ⇒ Future.successful(sinkContext)
         }
       }
-      Futures.sequence(sinkContexts.asJava, ec)
+      Futures.sequence(sinkContexts.asJava, dispatcher)
     }.map(_.asScala.toSeq)
   }
 
-  def loadAddress(key: String, trigger: Boolean = true): Future[AddressContext] = {
+  private def loadAddress(key: String, trigger: Boolean = true): Future[AddressContext] = {
     getConfig(key).map { kv ⇒
       val km = kv.config
       val addressId = km.value[Long]("id")
@@ -251,7 +305,7 @@ trait TeleporterConfigService {
     }
   }
 
-  def getConfig(key: String): Future[KeyValue] = {
+  private def getConfig(key: String): Future[KeyValue] = {
     eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent.newBuilder()
@@ -263,7 +317,7 @@ trait TeleporterConfigService {
     }._2.map(e ⇒ KV.parseFrom(e.getBody)).map(kv ⇒ KeyValue(kv.getKey, kv.getValue))
   }
 
-  def getRangeRegexConfig(key: String, start: Int = 0, limit: Int = Int.MaxValue): Future[Seq[KeyValue]] = {
+  private def getRangeRegexConfig(key: String, start: Int = 0, limit: Int = Int.MaxValue): Future[Seq[KeyValue]] = {
     eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent.newBuilder()
@@ -274,15 +328,5 @@ trait TeleporterConfigService {
       )
     }._2.map(e ⇒ KVS.parseFrom(e.getBody).getKvsList.asScala)
       .map(kvs ⇒ kvs.map(kv ⇒ KeyValue(kv.getKey, kv.getValue)))
-  }
-}
-
-class TeleporterConfigServiceImpl(val eventListener: EventListener[TeleporterEvent]
-                                 )(implicit val center: TeleporterCenter, val ec: ExecutionContext) extends TeleporterConfigService
-
-object TeleporterConfigService {
-  def apply(eventListener: EventListener[TeleporterEvent])
-           (implicit center: TeleporterCenter, ec: ExecutionContext): TeleporterConfigService = {
-    new TeleporterConfigServiceImpl(eventListener)(center, ec)
   }
 }

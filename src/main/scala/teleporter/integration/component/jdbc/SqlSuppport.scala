@@ -10,9 +10,9 @@ import teleporter.integration.script.Template
 import teleporter.integration.utils.Use
 
 /**
- * Author: kui.dai
- * Date: 2015/11/25.
- */
+  * Author: kui.dai
+  * Date: 2015/11/25.
+  */
 sealed trait Action
 
 case class Upsert(up: Sql, sert: Sql) extends Action
@@ -43,8 +43,9 @@ object PreparedSql {
   })
 
   /**
-   * inert into table (id,name) values(#{id},#{name})
-   */
+    * #{} replace ? for prepareStatement, {} only for text replace
+    * inert into table (id,name) values(#{id},#{name}) limit {offset},{pageSize}
+    */
   def apply(nameSql: NameSql): PreparedSql = {
     val predefinedSql = preparedSqlCache.get(nameSql.sql)
     val params = predefinedSql.paramNames.map {
@@ -152,8 +153,8 @@ trait SqlSupport extends Use {
         ps.setObject(i, param)
         i += 1
       }
+      logger.info(s"bulk query sql: ${preparedSql}")
       rs = ps.executeQuery()
-      logger.info(s"bulk query sql: ${preparedSql.sql}")
       SqlResult[Iterator[T]](
         conn = conn,
         ps = ps,
@@ -161,15 +162,17 @@ trait SqlSupport extends Use {
         result = new Iterator[T] {
           var isTakeOut = true
           var _next = false
+
           override def hasNext: Boolean =
-          if(isTakeOut) {
-            _next = rs.next()
-            isTakeOut = false
-            if (!_next) DbUtils.closeQuietly(conn, ps, rs)
-            _next
-          } else {
-            _next
-          }
+            if (isTakeOut) {
+              _next = rs.next()
+              isTakeOut = false
+              if (!_next) DbUtils.closeQuietly(conn, ps, rs)
+              _next
+            } else {
+              _next
+            }
+
           override def next(): T = {
             isTakeOut = true
             mapper(rs)

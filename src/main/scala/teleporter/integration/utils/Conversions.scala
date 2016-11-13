@@ -33,7 +33,10 @@ trait Conversions {
     case _ ⇒ throw new IllegalArgumentException(s"No match long type convert for type:${v.getClass}, value:$v")
   }
 
-  def asString(v: Any): String = v.toString
+  def asString(v: Any): String = v match {
+    case d: LocalDateTime ⇒ d.format(Dates.DEFAULT_DATE_FORMATTER)
+    case _ ⇒ v.toString
+  }
 
   def asNonEmptyString(v: Any): Option[String] = v match {
     case s: String if s.isEmpty ⇒ None

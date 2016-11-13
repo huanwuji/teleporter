@@ -51,13 +51,12 @@ trait ChunkTransaction[T, B] extends Transaction[T, B] with LazyLogging {
     }) {
       Transaction.Retry
     } else {
-      seqNr += 1
-      val chunkIdx = seqNr / txnConfig.blockSize
+      val nextSeqNr = seqNr + 1
+      val chunkIdx = nextSeqNr / txnConfig.blockSize
       if (chunkQueue.isEmpty) {
         chunkQueue.enqueue(chunkIdx → chunkCoordinate)
       } else if (chunkQueue.last._1 != chunkIdx) {
         if (chunkQueue.size >= txnConfig.maxBlockNum) {
-          seqNr -= 1
           return Transaction.OverLimit
         } else {
           chunkQueue.enqueue(chunkIdx → chunkCoordinate)
@@ -65,11 +64,13 @@ trait ChunkTransaction[T, B] extends Transaction[T, B] with LazyLogging {
       }
       grab match {
         case Some(data) ⇒
-          val message = TeleporterMessage[T](TId(id, seqNr), actorRef, data)
-          chunkPools.add(seqNr, message)
+          val message = TeleporterMessage[T](TId(id, nextSeqNr), actorRef, data)
+          chunkPools.add(nextSeqNr, message)
           handler(message)
+          seqNr = nextSeqNr
           Transaction.Normal
-        case None ⇒ Transaction.NoData
+        case None ⇒
+          Transaction.NoData
       }
     }
   }
@@ -114,7 +115,15 @@ trait ChunkTransaction[T, B] extends Transaction[T, B] with LazyLogging {
     }
   }
 
-  def isComplete(): Boolean = chunkQueue.size == 1 && chunkPools.unConfirmed(chunkQueue.last._1).isEmpty
+  def isComplete(): Boolean = if (isComplete()) {
+    val key = center.context.getContext[SourceContext](id).key
+    recoveryPoint.complete(key)
+    true
+  } else {
+    false
+  }
+
+  def _isComplete(): Boolean = chunkQueue.size == 1 && chunkPools.unConfirmed(chunkQueue.last._1).isEmpty
 
   override def close(): Unit = {}
 }
@@ -126,34 +135,36 @@ object ChunkTransaction {
 
   trait ChunkTransactionMetadata extends MapMetadata {
     val FTransaction = "transaction"
-    val FChannelSize = "channelSize"
-    val FBlockSize = "blockSize"
-    val FCommitDelay = "commitDelay"
-    val FMaxAge = "maxAge"
-    val FMaxBlockNum = "maxBlockNum"
     val FRecoveryPointEnabled = "recoveryPointEnabled"
+    val FChannelSize = "channelSize"
+    val FMaxBlockNum = "maxBlockNum"
+    val FBlockSize = "blockSize"
+    val FMaxAge = "maxAge"
     val FTimeoutRetry = "timeoutRetry"
+    val FCommitDelay = "commitDelay"
   }
 
-  case class ChunkTxnConfig(channelSize: Int = 1,
-                            blockSize: Int = 50,
-                            commitDelay: Option[Duration],
-                            maxAge: Duration = 1.minutes,
-                            maxBlockNum: Int = 5,
-                            recoveryPointEnabled: Boolean = true,
-                            timeoutRetry: Boolean = true)
+  case class ChunkTxnConfig(
+                             recoveryPointEnabled: Boolean = true,
+                             channelSize: Int = 1,
+                             maxBlockNum: Int = 5,
+                             blockSize: Int = 50,
+                             maxAge: Duration = 1.minutes,
+                             timeoutRetry: Boolean = true,
+                             commitDelay: Option[Duration]
+                           )
 
   object ChunkTxnConfig extends ChunkTransactionMetadata {
     def apply(config: MapBean): ChunkTxnConfig = {
       val transactionConfig = config[MapBean](FTransaction)
       ChunkTxnConfig(
-        channelSize = transactionConfig.__dict__[Int](FChannelSize).getOrElse(1),
-        blockSize = transactionConfig.__dict__[Int](FBlockSize).getOrElse(10000),
-        commitDelay = transactionConfig.__dict__[Duration](FCommitDelay),
-        maxAge = transactionConfig.__dict__[Duration](FMaxAge).getOrElse(2.minutes),
-        maxBlockNum = transactionConfig.__dict__[Int](FMaxBlockNum).getOrElse(5),
         recoveryPointEnabled = transactionConfig.__dict__[Boolean](FRecoveryPointEnabled).getOrElse(true),
-        timeoutRetry = transactionConfig.__dict__[Boolean](FTimeoutRetry).getOrElse(true)
+        channelSize = transactionConfig.__dict__[Int](FChannelSize).getOrElse(1),
+        maxBlockNum = transactionConfig.__dict__[Int](FMaxBlockNum).getOrElse(5),
+        blockSize = transactionConfig.__dict__[Int](FBlockSize).getOrElse(500),
+        maxAge = transactionConfig.__dict__[Duration](FMaxAge).getOrElse(2.minutes),
+        timeoutRetry = transactionConfig.__dict__[Boolean](FTimeoutRetry).getOrElse(true),
+        commitDelay = transactionConfig.__dict__[Duration](FCommitDelay)
       )
     }
   }
@@ -229,11 +240,9 @@ object ChunkTransaction {
         if (chunk.allConfirm()) {
           chunk.clear()
           currUsedChunk.update(realIdx, -1)
-        } else {
-          logger.debug(s"Miss confirm, $seqNr, $channel")
         }
       } else {
-        logger.debug(s"Miss confirm, $seqNr, $channel")
+        logger.info(s"Miss confirm, $seqNr, $channel")
       }
     }
 

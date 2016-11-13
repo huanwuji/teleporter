@@ -17,12 +17,12 @@ export class FormItemService {
           group[formItem.key] = this.toFormGroup(formItem.value);
           break;
         case ControlType.array:
-          group[formItem.key] = new FormArray(formItem.value.map((v: string) => new FormControl(v)));
+          group[formItem.key] = new FormArray(formItem.value.map((v: any) => new FormControl(v)));
           break;
         case ControlType.dynamicGroup:
           if (formItem.value) {
             let tmpGroup = {};
-            formItem.value.map((entry: {key: string, value: string}) => tmpGroup[entry.key] = new FormControl(entry.value));
+            formItem.value.map((entry: {key: string, value: any}) => tmpGroup[entry.key] = new FormControl(entry.value));
             group[formItem.key] = new FormGroup(tmpGroup);
           }
           break;
@@ -39,7 +39,7 @@ export class FormItemService {
       let value = obj[formItem.key];
       if (value) {
         if (formItem instanceof DynamicGroupFormItem) {
-          formItem.value = <[{key: string, value: string}]>Object.keys(value).map((key: string) => {
+          formItem.value = <[{key: string, value: any}]>Object.keys(value).map((key: string) => {
             return {key: key, value: value[key]};
           })
         } else if (formItem instanceof GroupFormItem) {
