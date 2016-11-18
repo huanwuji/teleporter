@@ -7,7 +7,8 @@ import {
   TextboxFormItem,
   TextareaFormItem,
   DynamicGroupFormItem,
-  DropdownFormItem
+  DropdownFormItem,
+  ArrayFormItem
 } from "../../../dynamic/form/form-item";
 
 export interface Stream extends Identity {
@@ -44,6 +45,11 @@ export class StreamService extends ConfigService<Stream> {
         label: 'name',
         required: true
       }),
+      new TextboxFormItem({
+        key: 'cron',
+        label: 'cron',
+        placeholder: '* * * * *'
+      }),
       new DropdownFormItem({
         key: 'status',
         label: 'status',
@@ -53,6 +59,10 @@ export class StreamService extends ConfigService<Stream> {
           {key: 'COMPLETE', value: 'COMPLETE'}
         ],
         value: 'NORMAL'
+      }),
+      new ArrayFormItem({
+        key: 'extraKeys',
+        label: 'extraKeys'
       }),
       new DynamicGroupFormItem({
         key: 'arguments',

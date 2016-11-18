@@ -4,6 +4,7 @@ import teleporter.integration.ClientApply
 import teleporter.integration.component.hbase.HbaseComponent
 import teleporter.integration.component.jdbc.DataSourceComponent
 import teleporter.integration.component.mongo.MongoComponent
+import teleporter.integration.component.taobao.TaobaoComponent
 import teleporter.integration.component.{ElasticComponent, _}
 
 import scala.collection.concurrent.TrieMap
@@ -33,7 +34,8 @@ trait TeleporterAddress extends AddressMetadata {
     "hbase.common" → HbaseComponent.hbaseApply,
     "elasticsearch" → ElasticComponent.elasticClientApply,
     "mongo" → MongoComponent.mongoApply,
-    "influxdb" → InfluxdbComponent.influxdbApply
+    "influxdb" → InfluxdbComponent.influxdbApply,
+    "taobao" → TaobaoComponent.taobaoClientApply
   )
 
   def apply[A](key: String)(implicit center: TeleporterCenter): A = {

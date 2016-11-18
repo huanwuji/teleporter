@@ -32,9 +32,6 @@ trait ScheduleMetadata extends MapMetadata {
   val FEnd = "end"
   val FPeriod = "period"
   val FMaxPeriod = "maxPeriod"
-  val FCron = "cron"
-
-  def lnsCron(implicit config: MapBean): Option[String] = config.__dict__[String](FSchedule, FCron)
 
   def update(config: MapBean, rollPage: RollPage): MapBean = config ++ (FSchedule, FPage → rollPage.currPage)
 

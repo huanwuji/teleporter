@@ -58,6 +58,10 @@ export class SourceService extends ConfigService<Source> {
         required: true
       }),
       new ArrayFormItem({
+        key: 'extraKeys',
+        label: 'extraKeys'
+      }),
+      new ArrayFormItem({
         key: 'errorRules',
         label: 'errorRules',
       })];

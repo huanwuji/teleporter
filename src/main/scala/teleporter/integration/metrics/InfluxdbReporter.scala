@@ -5,6 +5,7 @@ import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.component.{InfluxDto, InfluxdbClient}
 import teleporter.integration.core.TeleporterCenter
 import teleporter.integration.metrics.InfluxdbReporter.Notify
+import teleporter.integration.metrics.Metrics.Measurement
 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
@@ -36,16 +37,16 @@ class InfluxdbReporter(key: String, period: FiniteDuration)(implicit val center:
   def reports(registry: MetricRegistry): Unit = {
     val timestamp: Long = System.currentTimeMillis()
     registry.metrics.foreach {
-      case t2@(name, metrics) ⇒
+      case t2@(measurement, metrics) ⇒
         metrics match {
-          case counter: MetricsCounter ⇒ report(name, counter.dump(), timestamp)
-          case timer: MetricsTimer ⇒ report(name, timer.dump(), timestamp)
+          case counter: MetricsCounter ⇒ report(measurement, counter.dump(), timestamp)
+          case timer: MetricsTimer ⇒ report(measurement, timer.dump(), timestamp)
         }
     }
   }
 
-  def report(name: String, data: Map[String, Any], timestamp: Long): Unit = {
-    val dto = InfluxDto(name, data, System.currentTimeMillis())
+  def report(measurement: Measurement, data: Map[String, Any], timestamp: Long): Unit = {
+    val dto = InfluxDto(measurement, data, System.currentTimeMillis())
     client.save(dto).onComplete {
       case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
       case _ ⇒

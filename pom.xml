@@ -196,6 +196,12 @@
         </dependency>
 
         <dependency>
+            <groupId>com.taobao.taobao-sdk</groupId>
+            <artifactId>taobao-sdk-java-auto</artifactId>
+            <version>1465714710963-20160819</version>
+        </dependency>
+
+        <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
             <version>2.5.1</version>
@@ -316,9 +322,9 @@
     <profiles>
         <profile>
             <id>assembly</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
+            <!--<activation>-->
+            <!--<activeByDefault>true</activeByDefault>-->
+            <!--</activation>-->
             <build>
                 <plugins>
                     <plugin>

@@ -71,7 +71,7 @@ trait SubscriberSupport[A] extends ActorSubscriber with Component with SqlSuppor
         val sinkContext = center.context.getContext[SinkContext](key)
         enforcer = Enforcer(key, sinkConfig)
         client = center.components.address[A](sinkContext.addressKey)
-        router = context.actorOf(BalancingPool(parallelism).props(workProps))
+        router = context.actorOf(BalancingPool(parallelism).props(workProps).withDispatcher("akka.teleporter.blocking-io-dispatcher"))
         requestStrategyManager.autoRequestStrategy(new MaxInFlightRequestStrategy(max = parallelism * 16) {
 
           override def batchSize: Int = parallelism * 8

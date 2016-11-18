@@ -4,10 +4,8 @@ import akka.actor.{ActorSystem, Props}
 import akka.stream.ActorMaterializer
 import com.typesafe.config.ConfigFactory
 import teleporter.integration.cluster.broker.http.HttpServer
-import teleporter.integration.cluster.broker.leveldb.LevelDBService
 import teleporter.integration.cluster.broker.tcp.{ConnectionKeeper, RpcServer}
 import teleporter.integration.cluster.rpc.proto.Rpc.TeleporterEvent
-import teleporter.integration.component.leveldb.LevelDBs
 import teleporter.integration.utils.EventListener
 
 import scala.collection.concurrent.TrieMap
@@ -20,13 +18,13 @@ object Broker {
     val config = ConfigFactory.load("broker")
     implicit val system = ActorSystem("broker", config)
     implicit val mater = ActorMaterializer()
-    val configService: PersistentService = LevelDBService(LevelDBs.applyTable("teleporter", "/config"))
-    val runtimeService: PersistentService = LevelDBService(LevelDBs.applyTable("teleporter", "/runtime"))
+    import system.dispatcher
+    val teleporterConfig = config.getConfig("teleporter")
+    val (configService, runtimeService) = PersistentService(teleporterConfig)
     val connectionKeepers = TrieMap[String, ConnectionKeeper]()
     val configNotify = system.actorOf(Props(classOf[ConfigNotify], connectionKeepers, configService, runtimeService))
     val eventListener = EventListener[TeleporterEvent]()
-    val brokerConfig = config.getConfig("teleporter")
-    val (bind, port, tcpPort) = (brokerConfig.getString("bind"), brokerConfig.getInt("port"), brokerConfig.getInt("tcpPort"))
+    val (bind, port, tcpPort) = (teleporterConfig.getString("bind"), teleporterConfig.getInt("port"), teleporterConfig.getInt("tcpPort"))
     RpcServer(bind, tcpPort, configService, runtimeService, connectionKeepers, eventListener)
     HttpServer(bind, port, configNotify, configService, runtimeService, connectionKeepers, eventListener)
   }

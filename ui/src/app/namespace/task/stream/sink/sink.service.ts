@@ -51,6 +51,10 @@ export class SinkService extends ConfigService<Sink> {
         required: true
       }),
       new ArrayFormItem({
+        key: 'extraKeys',
+        label: 'extraKeys'
+      }),
+      new ArrayFormItem({
         key: 'errorRules',
         label: 'errorRules'
       }),

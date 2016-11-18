@@ -39,5 +39,5 @@ class RocksDBService(table: RocksTable) extends PersistentService {
 }
 
 object RocksDBService {
-  def apply(table: RocksTable) = new RocksDBService(table)
+  def apply(table: RocksTable): RocksDBService = new RocksDBService(table)
 }

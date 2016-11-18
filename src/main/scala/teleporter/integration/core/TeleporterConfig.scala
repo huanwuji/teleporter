@@ -5,8 +5,7 @@ import akka.dispatch.Futures
 import akka.pattern._
 import akka.util.Timeout
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
-import teleporter.integration.cluster.broker.PersistentProtocol.Values.PartitionValue
-import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys}
+import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.rpc.proto.Rpc.{EventType, KV, KVS, TeleporterEvent}
 import teleporter.integration.cluster.rpc.proto.broker.Broker.{KVGet, RangeRegexKV}
@@ -52,8 +51,11 @@ object TaskMetadata extends TaskMetadata
 trait StreamMetadata extends ConfigMetadata {
   val FTemplate = "template"
   val FStatus = "status"
+  val FCron = "cron"
 
   def lnsStatus(implicit bean: MapBean): String = bean[String](FStatus)
+
+  def lnsCron(implicit bean: MapBean): String = bean[String](FCron)
 }
 
 object StreamMetadata extends StreamMetadata
@@ -89,7 +91,6 @@ trait SinkMetadata extends ConfigMetadata {
 }
 
 trait VariableMetadata extends ConfigMetadata
-
 
 trait TeleporterConfig extends MapBean {
   def id() = apply[Long]("id")
@@ -129,6 +130,10 @@ object TeleporterConfigActor {
 
   case class LoadAddress(key: String, trigger: Boolean = true)
 
+  case class LoadVariable(key: String, trigger: Boolean = true)
+
+  case class LoadExtra(key: String, trigger: Boolean = true)
+
   def apply(eventListener: EventListener[TeleporterEvent])
            (implicit center: TeleporterCenter): ActorRef = {
     center.system.actorOf(Props(classOf[TeleporterConfigActor], eventListener, center), "teleporter-config")
@@ -153,17 +158,18 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
     case LoadSink(key, trigger) ⇒ loadSink(key, trigger) pipeTo sender()
     case LoadSinks(key, trigger) ⇒ loadSinks(key, trigger) pipeTo sender()
     case LoadAddress(key, trigger) ⇒ loadAddress(key, trigger) pipeTo sender()
+    case LoadExtra(key, trigger) ⇒ loadExtraKey(key, trigger) pipeTo sender()
   }
 
   private def loadPartition(key: String, trigger: Boolean = true): Future[PartitionContext] = {
     getConfig(key).flatMap { kv ⇒
-      val kb = kv.keyBean[PartitionValue]
-      val partitionId = kb.value.id
-      val partitionContext = PartitionContext(id = partitionId, key = kb.key, config = kb.value)
+      val km = kv.config
+      val partitionId = km.value[Long]("id")
+      val partitionContext = PartitionContext(id = partitionId, key = km.key, config = km.value)
       val tasKey = Keys.mapping(key, PARTITION, TASK)
       for {
         task ← self ? LoadTask(tasKey, trigger = false)
-        streamContext ← Futures.sequence(kb.value.keys.map {
+        streamContext ← Futures.sequence(km.value.__dicts__[String]("extraKeys").map {
           key ⇒ (self ? LoadStreams(key, trigger = false)).asInstanceOf[Future[Seq[StreamContext]]]
         }.asJava, dispatcher).map(_.asScala.flatten)
       } yield {
@@ -174,12 +180,17 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
   }
 
   private def loadTask(key: String, trigger: Boolean = true): Future[TaskContext] = {
-    getConfig(key).map { kv ⇒
+    getConfig(key).flatMap { kv ⇒
       val km = kv.config
       val taskId = km.value[Long]("id")
-      val taskContext = TaskContext(id = taskId, key = km.key, config = km.value, variableKeys = Set.empty)
-      center.context.ref ! Upsert(taskContext, trigger)
-      taskContext
+      val taskContext = TaskContext(id = taskId, key = km.key, config = km.value)
+      for {
+        extraKeys ← Futures.sequence(taskContext.config.__dicts__[String]("extraKeys").map(key ⇒ self ? LoadExtra(key, trigger))
+          .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
+      } yield {
+        center.context.ref ! Upsert(taskContext, trigger)
+        taskContext
+      }
     }
   }
 
@@ -187,10 +198,12 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
     getConfig(key).flatMap { kv ⇒
       val km = kv.config
       val streamId = km.value[Long]("id")
-      val streamContext = StreamContext(id = streamId, key = km.key, config = km.value, variableKeys = Set.empty)
+      val streamContext = StreamContext(id = streamId, key = km.key, config = km.value)
       for {
         sourceContexts ← self ? LoadSources(Keys.mapping(key, STREAM, STREAM_SOURCES), trigger = false)
         sinkContexts ← self ? LoadSinks(Keys.mapping(key, STREAM, STREAM_SINKS), trigger = false)
+        extraKeys ← Futures.sequence(streamContext.config.__dicts__[String]("extraKeys").map(key ⇒ self ? LoadExtra(key, trigger))
+          .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
       } yield {
         center.context.ref ! Upsert(streamContext, trigger)
         streamContext
@@ -203,10 +216,12 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
       val streamContexts = kvs.map { kv ⇒
         val km = kv.config
         val streamId = km.value[Long]("id")
-        val streamContext = StreamContext(id = streamId, key = km.key, config = km.value, variableKeys = Set.empty)
+        val streamContext = StreamContext(id = streamId, key = km.key, config = km.value)
         for {
           sourceContexts ← self ? LoadSources(Keys.mapping(kv.key, STREAM, STREAM_SOURCES), trigger = false)
           sinkContexts ← self ? LoadSinks(Keys.mapping(kv.key, STREAM, STREAM_SINKS), trigger = false)
+          extraKeys ← Futures.sequence(streamContext.config.__dicts__[String]("extraKeys").map(key ⇒ self ? LoadExtra(key, trigger))
+            .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
         } yield {
           center.context.ref ! Upsert(streamContext, trigger)
           streamContext
@@ -220,11 +235,13 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
     getConfig(key).flatMap { kv ⇒
       val km = kv.config
       val sourceId = km.value[Long]("id")
-      val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value, variableKeys = Set.empty)
+      val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value)
       km.value.__dict__[String]("address") match {
         case Some(addressKey) ⇒
           for {
             addressContext ← self ? LoadAddress(sourceContext.addressKey, trigger = false)
+            extraKeys ← Futures.sequence(sourceContext.config.__dicts__[String]("extraKeys").map(key ⇒ self ? LoadExtra(key, trigger))
+              .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
           } yield {
             center.context.ref ! Upsert(sourceContext, trigger)
             sourceContext
@@ -239,11 +256,13 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
       val sourceContexts = kvs.map { kv ⇒
         val km = kv.config
         val sourceId = km.value[Long]("id")
-        val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value, variableKeys = Set.empty)
+        val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value)
         km.value.__dict__[String]("address") match {
           case Some(addressKey) ⇒
             for {
               addressContext ← self ? LoadAddress(sourceContext.addressKey, trigger = false)
+              extraKeys ← Futures.sequence(sourceContext.config.__dicts__[String]("extraKeys").map(key ⇒ self ? LoadExtra(key, trigger))
+                .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
             } yield {
               center.context.ref ! Upsert(sourceContext, trigger)
               sourceContext
@@ -259,11 +278,13 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
     getConfig(key).flatMap { kv ⇒
       val km = kv.config
       val sinkId = km.value[Long]("id")
-      val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value, variableKeys = Set.empty)
+      val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value)
       km.value.__dict__[String]("address") match {
         case Some(addressKey) ⇒
           for {
             addressContext ← self ? LoadAddress(sinkContext.addressKey, trigger = false)
+            extraKeys ← Futures.sequence(sinkContext.config.__dicts__[String]("extraKeys").map(key ⇒ self ? LoadExtra(key, trigger))
+              .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
           } yield {
             center.context.ref ! Upsert(sinkContext, trigger)
             sinkContext
@@ -278,11 +299,13 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
       val sinkContexts = kvs.map { kv ⇒
         val km = kv.config
         val sinkId = km.value[Long]("id")
-        val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value, variableKeys = Set.empty)
+        val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value)
         km.value.__dict__[String]("address") match {
           case Some(addressKey) ⇒
             for {
               addressContext ← self ? LoadAddress(sinkContext.addressKey, trigger = false)
+              extraKeys ← Futures.sequence(sinkContext.config.__dicts__[String]("extraKeys").map(key ⇒ self ? LoadExtra(key, trigger))
+                .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
             } yield {
               center.context.ref ! Upsert(sinkContext, trigger)
               sinkContext
@@ -294,14 +317,33 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
     }.map(_.asScala.toSeq)
   }
 
+  private def loadExtraKey(key: String, trigger: Boolean = true): Future[ComponentContext] = {
+    Keys.table(key) match {
+      case Tables.address ⇒
+        loadAddress(key, trigger)
+      case Tables.variable ⇒
+        loadVariable(key, trigger)
+    }
+  }
+
   private def loadAddress(key: String, trigger: Boolean = true): Future[AddressContext] = {
     getConfig(key).map { kv ⇒
       val km = kv.config
       val addressId = km.value[Long]("id")
       val share = km.value.__dict__[Boolean]("share").getOrElse(false)
-      val addressContext = AddressContext(id = addressId, key = km.key, config = km.value, linkKeys = Set.empty, variableKeys = Set.empty, clientRefs = ClientRefs(share))
+      val addressContext = AddressContext(id = addressId, key = km.key, config = km.value, linkKeys = Set.empty, clientRefs = ClientRefs(share))
       center.context.ref ! Upsert(addressContext, trigger)
       addressContext
+    }
+  }
+
+  private def loadVariable(key: String, trigger: Boolean = true): Future[VariableContext] = {
+    getConfig(key).map { kv ⇒
+      val km = kv.config
+      val variableId = km.value[Long]("id")
+      val variableContext = VariableContext(id = variableId, key = km.key, config = km.value, linkKeys = Set.empty)
+      center.context.ref ! Upsert(variableContext, trigger)
+      variableContext
     }
   }
 

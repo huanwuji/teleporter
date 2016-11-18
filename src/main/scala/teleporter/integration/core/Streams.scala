@@ -1,5 +1,6 @@
 package teleporter.integration.core
 
+import java.util.UUID
 import java.util.concurrent.{Callable, TimeUnit}
 
 import akka.Done
@@ -8,6 +9,7 @@ import akka.stream.KillSwitch
 import com.google.common.base.Charsets
 import com.google.common.cache.CacheBuilder
 import com.google.common.hash.Hashing
+import com.markatta.akron.CronTab.{UnSchedule, UnScheduled}
 import com.markatta.akron.{CronExpression, CronTab}
 import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.core.Streams.{ExecuteStream, _}
@@ -15,6 +17,7 @@ import teleporter.integration.script.ScriptEngines
 import teleporter.integration.utils.Converters._
 
 import scala.collection.concurrent.TrieMap
+import scala.collection.mutable
 import scala.concurrent.Future
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util.{Failure, Success}
@@ -34,6 +37,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
     .expireAfterWrite(5, TimeUnit.MINUTES)
     .build[String, StreamLogic]()
   private val streamStates = TrieMap[String, StreamState]()
+  private val cronCache = mutable.Map[Any, UUID]()
 
   @scala.throws[Exception](classOf[Exception])
   override def preStart(): Unit = {
@@ -48,8 +52,19 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
         case Duration.Zero ⇒ self ! command
         case d: FiniteDuration ⇒ context.system.scheduler.scheduleOnce(d, self, command)
       }
-    case CronCommand(command, cron) ⇒ center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
-    case cronSchedule@CronTab.Scheduled(jobId, recipient, message) ⇒ logger.info(s"CronSchedule $cronSchedule was start")
+    case CronCommand(command, cron) ⇒
+      cronCache.remove(command).foreach {
+        jobId ⇒
+          logger.info(s"Cancel exists cron job, $command, $jobId")
+          center.crontab ! UnSchedule(jobId)
+          center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
+      }
+      center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
+    case cronSchedule@CronTab.Scheduled(jobId, recipient, message) ⇒
+      logger.info(s"CronSchedule $cronSchedule was start")
+      cronCache += (message → jobId)
+    case UnScheduled(jobId) ⇒
+      logger.info(s"Cron job was cancel, $jobId")
   }
 
   def command: Receive = {
@@ -75,13 +90,18 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
   }
 
   def start(key: String): Unit = {
-    loadTemplate(key, cache = true) match {
-      case Some(result) ⇒
-        result.onComplete {
-          case Success(template) ⇒ self ! ExecuteStream(key, template)
-          case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
+    center.context.getContext[StreamContext](key).config.__dict__[String](StreamMetadata.FCron) match {
+      case Some(cron) ⇒
+        self ! CronCommand(Streams.Start(key), cron)
+      case None ⇒
+        loadTemplate(key, cache = true) match {
+          case Some(result) ⇒
+            result.onComplete {
+              case Success(template) ⇒ self ! ExecuteStream(key, template)
+              case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
+            }
+          case None ⇒ logger.warn(s"Can't load template $key")
         }
-      case None ⇒ logger.warn(s"Can't load template $key")
     }
   }
 
@@ -96,11 +116,12 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
   }
 
   def executeStream(key: String, template: String): Unit = {
-    val streamLogic = streamLogicCache.get(Hashing.md5().hashString(template, Charsets.UTF_8).toString, new Callable[StreamLogic]() {
-      override def call(): StreamLogic = {
-        ScriptEngines.scala.eval(template).asInstanceOf[StreamLogic]
-      }
-    })
+    val streamLogic = streamLogicCache.get(Hashing.md5().hashString(template, Charsets.UTF_8).toString,
+      new Callable[StreamLogic]() {
+        override def call(): StreamLogic = {
+          ScriptEngines.scala.eval(template).asInstanceOf[StreamLogic]
+        }
+      })
     logger.info(s"$key stream will executed")
     streamStates += key → StreamState(streamLogic(key, center))
   }

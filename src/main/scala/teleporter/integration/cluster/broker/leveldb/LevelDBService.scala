@@ -39,5 +39,5 @@ class LevelDBService(table: LevelTable) extends PersistentService {
 }
 
 object LevelDBService {
-  def apply(table: LevelTable) = new LevelDBService(table)
+  def apply(table: LevelTable): LevelDBService = new LevelDBService(table)
 }

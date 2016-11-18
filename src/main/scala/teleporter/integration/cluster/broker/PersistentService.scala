@@ -1,9 +1,17 @@
 package teleporter.integration.cluster.broker
 
+import com.typesafe.config.Config
+import org.mongodb.scala.MongoClient
 import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys}
+import teleporter.integration.cluster.broker.leveldb.LevelDBService
+import teleporter.integration.cluster.broker.mongo.MongoDBService
+import teleporter.integration.cluster.broker.rocksdb.RocksDBService
+import teleporter.integration.component.leveldb.LevelDBs
+import teleporter.integration.component.rocksdb.RocksDBs
 import teleporter.integration.core.TeleporterConfig
 import teleporter.integration.utils.Jackson
 
+import scala.concurrent.ExecutionContext
 import scala.reflect._
 
 /**
@@ -184,4 +192,21 @@ object PersistentProtocol {
 
   case class AtomicKeyValue(key: String, expect: String, update: String)
 
+}
+
+object PersistentService {
+  def apply(config: Config)(implicit ec: ExecutionContext): (PersistentService, PersistentService) = {
+    val storageConfig = config.getConfig("storage")
+    storageConfig.getString("type") match {
+      case "leveldb" ⇒
+        (LevelDBService(LevelDBs.applyTable("teleporter", "/config")), LevelDBService(LevelDBs.applyTable("teleporter", "/runtime")))
+      case "rocksdb" ⇒
+        (RocksDBService(RocksDBs.applyTable("teleporter", "/config")), RocksDBService(RocksDBs.applyTable("teleporter", "/runtime")))
+      case "mongo" ⇒
+        val mongoConfig = storageConfig.getConfig("mongo")
+        val mongoClient = MongoClient(mongoConfig.getString("uri"))
+        val database = mongoClient.getDatabase(mongoConfig.getString("database"))
+        (MongoDBService(database.getCollection("config")), MongoDBService(database.getCollection("runtime")))
+    }
+  }
 }

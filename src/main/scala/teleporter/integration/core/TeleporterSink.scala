@@ -29,7 +29,8 @@ trait TeleporterSink extends SinkMetadata with LazyLogging {
     implicit val config = context.config
     Sink.actorSubscriber[T](Props(sinkApply(lnsCategory), key, center))
       .mapMaterializedValue {
-        ref ⇒ context.actorRef = ref; ref
+        ref ⇒
+          center.context.indexes.modifyByKey2(key, _.asInstanceOf[SinkContext].copy(actorRef = ref)); ref
       }
   }
 

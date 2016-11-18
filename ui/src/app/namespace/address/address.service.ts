@@ -81,8 +81,10 @@ export class AddressService extends ConfigService<Address> {
         return this.getMongoItems();
       case 'influxdb':
         return this.getInfluxdbItems();
+      case 'taobao':
+        return this.getTaobaoItems();
       default:
-        return this.getKafkaConsumerItems();
+        throw "Can't found this type"
     }
   }
 
@@ -160,6 +162,17 @@ export class AddressService extends ConfigService<Address> {
       new TextboxFormItem({key: 'host', label: 'host'}),
       new TextboxFormItem({key: 'port', label: 'port'}),
       new TextboxFormItem({key: 'db', label: 'db'})
+    ];
+  }
+
+  private getTaobaoItems() {
+    return [
+      new TextboxFormItem({key: 'serverUrl', label: 'serverUrl', value: 'https://eco.taobao.com/router/rest'}),
+      new TextboxFormItem({key: 'appKey', label: 'appKey'}),
+      new TextboxFormItem({key: 'appSecret', label: 'appSecret'}),
+      new TextboxFormItem({key: 'format', label: 'format', value: 'json'}),
+      new TextboxFormItem({key: 'connectTimeout', label: 'connectTimeout', type: 'number', value: 1000}),
+      new TextboxFormItem({key: 'readTimeout', label: 'readTimeout', type: 'number', value: 5000})
     ];
   }
 }

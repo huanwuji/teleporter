@@ -4,7 +4,7 @@
 
 Now support:
 component|
----------|
+---------|-
 kafka    |
 jdbc     |
 
@@ -46,7 +46,8 @@ ng serve --proxy-config proxy.conf.json
 ```
 
 #####broker
-It's contains config manager, streams dynamic updated, It's use a scala script for a streams logic which write In akka streams, Only a function, like this:
+It's contains config manager, streams dynamic updated, It's use a scala script for a streams logic which write In akka streams, Only implement a function:
+`(key: String, center: TeleporterCenter) ⇒ (KillSwitch, Future[Done])`, like this:
 ```scala
 object JdOrderItem extends StreamLogic {
   override def apply(key: String, center: TeleporterCenter): (KillSwitch, Future[Done]) = {
@@ -60,8 +61,8 @@ object JdOrderItem extends StreamLogic {
   }
 }
 ```
-Or it's can make a template for zero code. And other standrd config is defined on UI, So it's easy config. UI use [angular2 dynamic form](https://angular.io/docs/ts/latest/cookbook/dynamic-form.html), So it's add config UI by config.Metrics use influxdb show as chartjs.
-Every client only use one tcp connection for all thing with broker for high performance. Every client keep connection for multi broker and don't have a master for high available. Don't use listener for config change event. Use the trigger for change. The store is easy change. Because config is only use KV store. change store only implement one interface only 4 method. Default use leveldb, but it's easy use other database.
+Or it's can make a template for zero code. And other standrd config is defined on UI, So it's easy config. UI use [angular2 dynamic form](https://angular.io/docs/ts/latest/cookbook/dynamic-form.html), So it's add config UI by config.Every client only use one tcp connection for all thing with broker for high performance. Every client keep connection for multi broker and don't have a master for high available. Don't use listener for config change event. Use the trigger for change. The store is easy change. Because config is only use KV store. change store only implement one interface only 4 method. Default use leveldb, but it's easy use other database.
+Metrics use influxdb show as chartjs, this statistics rate, error count etc.
 
 ####instance
 instance is only a executor streams. Write back state. Give the instance a unique key, and then config the relation for task on UI. It's will auto exec.

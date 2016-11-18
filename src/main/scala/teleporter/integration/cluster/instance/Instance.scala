@@ -7,7 +7,6 @@ import teleporter.integration.core.TeleporterCenter
   */
 object Instance {
   def main(args: Array[String]): Unit = {
-    val center = TeleporterCenter()
-    center.start()
+    TeleporterCenter().start()
   }
 }
