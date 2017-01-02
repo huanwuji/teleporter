@@ -1,6 +1,5 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
-import {Location} from "@angular/common";
+import {ActivatedRoute, Router} from "@angular/router";
 import {GroupService, Group} from "./group.service";
 import {KeyBean} from "../../rest.servcie";
 import {FormItemBase} from "../../dynamic/form/form-item";
@@ -26,8 +25,8 @@ export class GroupListComponent implements OnInit {
   }
 
   list() {
-    this.groupService.range(`/group/${this.ns}`, 0, 2000)
-      .then((kbs: KeyBean<Group>[])=> this.kbs = kbs);
+    this.groupService.range(`/group/${this.ns}`)
+      .then((kbs: KeyBean<Group>[]) => this.kbs = kbs);
   }
 
   del(key: string) {
@@ -52,7 +51,7 @@ export class GroupDetailComponent implements OnInit {
   private ns: string;
   private key: string;
 
-  constructor(public route: ActivatedRoute, public location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               public groupService: GroupService, private formItemService: FormItemService) {
   }
 
@@ -85,7 +84,7 @@ export class GroupDetailComponent implements OnInit {
   onSubmit() {
     let group = this.formGroup.value;
     this.groupService.save(this.fullKey(group.key), group)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${group.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

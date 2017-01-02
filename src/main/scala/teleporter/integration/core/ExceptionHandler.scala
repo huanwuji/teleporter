@@ -7,8 +7,6 @@ import teleporter.integration.component.{ScheduleActorPublisherMessage, Subscrib
 import teleporter.integration.core.Streams.{DelayCommand, Stop}
 import teleporter.integration.metrics.Metrics.{Measurement, Tag, Tags}
 import teleporter.integration.metrics.MetricsCounter
-import teleporter.integration.utils.Converters._
-import teleporter.integration.utils.{MapBean, MapMetadata}
 
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
@@ -19,11 +17,6 @@ import scala.util.matching.Regex
   * Author: kui.dai
   * Date: 2016/3/23.
   */
-trait ErrorRuleMetadata extends MapMetadata {
-  val FMatch = "match"
-  val FCmd = "cmd"
-}
-
 trait ExceptionHandler {
   def handle(key: String, cause: Throwable, message: Any = None)(implicit self: ActorRef, center: TeleporterCenter, ec: ExecutionContext)
 }
@@ -77,7 +70,7 @@ object ExceptionHandler {
 
       override def handle(key: String, cause: Throwable, message: Any)(implicit self: ActorRef, center: TeleporterCenter, ec: ExecutionContext): Unit = {
         message match {
-          case failure@SubscriberMessage.Failure(_, _, nrOfRetries) ⇒
+          case SubscriberMessage.Failure(_, _, nrOfRetries) ⇒
             if (maxNrOfRetries > 0 && nrOfRetries > maxNrOfRetries) {
               ignore.handle(key, cause, message)
               return
@@ -95,7 +88,8 @@ object ExceptionHandler {
         message match {
           case onNext: OnNext ⇒
             onNext.element match {
-              case teleporterMessage: TeleporterMessage[Any] ⇒ teleporterMessage.toNext(teleporterMessage)
+              case teleporterMessage: TeleporterMessage[_] ⇒ teleporterMessage.confirmed(teleporterMessage)
+              case teleporterMessages: Seq[TeleporterMessage[_]] ⇒ teleporterMessages.foreach(msg ⇒ msg.confirmed(msg))
               case _ ⇒ //ignore
             }
             self ! SubscriberMessage.Success(onNext)
@@ -110,10 +104,10 @@ object ExceptionHandler {
 
 case class ExceptionRule(errorMatch: Regex, level: String, handler: ExceptionHandler)
 
-object ExceptionRule extends ErrorRuleMetadata {
+object ExceptionRule {
   //stream.start(1.minutes, 3)
-  val actionMatch = "\\s+(\\w+\\.\\w+)(\\(([\\w.]+)(,\\s+(\\d+))?\\))?".r
-  val ALL_MATCH = ".".r
+  val actionMatch: Regex = "\\s+(\\w+\\.\\w+)(\\(([\\w.]+)(,\\s+(\\d+))?\\))?".r
+  val ALL_MATCH: Regex = ".".r
 
   def apply(streamKey: String, errorMatch: String, level: String, cmd: String): ExceptionRule = {
     val handler: ExceptionHandler = cmd match {
@@ -140,8 +134,8 @@ object ExceptionRule extends ErrorRuleMetadata {
 }
 
 class Enforcer(key: String, rules: Seq[ExceptionRule], defaultHandler: ExceptionHandler)(implicit center: TeleporterCenter) extends LazyLogging {
-  val errorMetrics = mutable.HashMap[String, MetricsCounter]()
-  val defaultMetrics = center.metricsRegistry.counter(Measurement(key, Seq(Tags.error, Tag("level", "INFO"))))
+  val errorMetrics: mutable.HashMap[String, MetricsCounter] = mutable.HashMap[String, MetricsCounter]()
+  val defaultMetrics: MetricsCounter = center.metricsRegistry.counter(Measurement(key, Seq(Tags.error, Tag("level", "INFO"))))
 
   def execute(cause: Throwable, message: Any = None)(implicit self: ActorRef, center: TeleporterCenter, ec: ExecutionContext): Unit = {
     logger.error(s"$key, ${cause.getMessage}", cause)
@@ -158,8 +152,8 @@ class Enforcer(key: String, rules: Seq[ExceptionRule], defaultHandler: Exception
   }
 }
 
-object Enforcer extends ConfigMetadata with LazyLogging {
-  val ruleMatch = "(.*)(:(DEBUG|INFO|WARN|ERROR))?\\s*=>\\s*(.*)".r
+object Enforcer extends LazyLogging {
+  val ruleMatch: Regex = "(.*)(:(DEBUG|INFO|WARN|ERROR))?\\s*=>\\s*(.*)".r
 
   /**
     * *: restart|stop
@@ -167,14 +161,13 @@ object Enforcer extends ConfigMetadata with LazyLogging {
     * regex: handler
     * Unknown column: stop
     */
-  def apply(key: String, config: MapBean)(implicit center: TeleporterCenter): Enforcer = {
+  def apply(key: String, config: ConfigMetaBean)(implicit center: TeleporterCenter): Enforcer = {
     val stream = center.context.getContext[ComponentContext](key) match {
       case sourceContext: SourceContext ⇒ sourceContext.stream
       case sinkContext: SinkContext ⇒ sinkContext.stream
     }
     val streamKey = stream.key
-    val errorRules = config.__dicts__[String](FErrorRules)
-    val rules = errorRules.map {
+    val rules = config.errorRules.map {
       case ruleMatch(errorMatch, _, level, action) ⇒ ExceptionRule(streamKey, errorMatch, level, action)
     }
     new Enforcer(key, rules, new ExceptionHandler.Stream.StreamCommand(streamKey, Streams.DelayCommand(Stop(streamKey))))

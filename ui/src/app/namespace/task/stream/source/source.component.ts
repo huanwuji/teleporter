@@ -1,7 +1,6 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
+import {ActivatedRoute, Router} from "@angular/router";
 import {SourceService, Source} from "./source.service";
-import {Location} from "@angular/common";
 import {KeyBean} from "../../../../rest.servcie";
 import {FormControl, FormGroup} from "@angular/forms";
 import {FormItemBase} from "../../../../dynamic/form/form-item";
@@ -32,7 +31,7 @@ export class SourceListComponent implements OnInit {
   }
 
   private list() {
-    this.sourceService.range(`/source/${this.ns}/${this.task}/${this.stream}`, 0, 2000)
+    this.sourceService.range(`/source/${this.ns}/${this.task}/${this.stream}`)
       .then(kbs => this.kbs = kbs);
   }
 
@@ -60,7 +59,7 @@ export class SourceDetailComponent implements OnInit {
   private stream: string = "";
   private key: string;
 
-  constructor(public route: ActivatedRoute, public location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               public sourceService: SourceService, private formItemService: FormItemService) {
   }
 
@@ -110,7 +109,7 @@ export class SourceDetailComponent implements OnInit {
   onSubmit() {
     let source = this.formGroup.value;
     this.sourceService.save(this.fullKey(source.key), source)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${source.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

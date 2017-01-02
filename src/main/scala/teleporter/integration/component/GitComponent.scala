@@ -11,25 +11,37 @@ import akka.stream.Materializer
 import akka.stream.scaladsl.Flow
 import com.google.common.cache.CacheBuilder
 import teleporter.integration.ClientApply
-import teleporter.integration.core.{AddressContext, AddressMetadata, AutoCloseClientRef}
-import teleporter.integration.utils.Converters._
-import teleporter.integration.utils.{MapBean, SimpleHttpClient}
+import teleporter.integration.core.{AddressContext, AddressMetaBean, AutoCloseClientRef}
+import teleporter.integration.utils.SimpleHttpClient
 
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
   * Created by kui.dai on 2016/7/7.
   */
-trait GitMetadata extends AddressMetadata {
+object GitMetadataBean {
   val FHost = "host"
   val FPort = "port"
   val FUsername = "username"
   val FPassword = "password"
 }
 
+class GitMetadataBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
+
+  import GitMetadataBean._
+
+  def host: String = client[String](FHost)
+
+  def port: Int = client[Int](FPort)
+
+  def username: String = client[String](FUsername)
+
+  def password: String = client[String](FPassword)
+}
+
 case class GitClient(username: String, password: String)
                     (implicit gitServer: Flow[HttpRequest, HttpResponse, Future[OutgoingConnection]])
-  extends SimpleHttpClient with GitMetadata with AutoCloseable {
+  extends SimpleHttpClient with AutoCloseable {
 
   private val requestCache = CacheBuilder.newBuilder()
     .maximumSize(100)
@@ -51,12 +63,12 @@ case class GitClient(username: String, password: String)
   override def close(): Unit = {}
 }
 
-object GitComponent extends GitMetadata {
+object GitComponent {
   val git: ClientApply = (key, center) ⇒ {
     import center.system
     val addressContext = center.context.getContext[AddressContext](key)
-    val clientConfig = addressContext.config[MapBean]("client")
-    implicit val outgoingConnection = Http().outgoingConnection(host = clientConfig[String](FHost), port = clientConfig[Int](FPort))
-    AutoCloseClientRef(key, GitClient(clientConfig[String](FUsername), clientConfig[String](FPassword)))
+    val config = addressContext.config.mapTo[GitMetadataBean]
+    implicit val outgoingConnection = Http().outgoingConnection(host = config.host, port = config.port)
+    AutoCloseClientRef(key, GitClient(config.username, config.password))
   }
 }

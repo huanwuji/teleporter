@@ -14,7 +14,7 @@ import com.markatta.akron.{CronExpression, CronTab}
 import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration.core.Streams.{ExecuteStream, _}
 import teleporter.integration.script.ScriptEngines
-import teleporter.integration.utils.Converters._
+import teleporter.integration.utils.CronFixed
 
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
@@ -53,14 +53,15 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
         case d: FiniteDuration ⇒ context.system.scheduler.scheduleOnce(d, self, command)
       }
     case CronCommand(command, cron) ⇒
+      val fixedCron = CronFixed.fixed(cron)
       cronCache.remove(command).foreach {
         jobId ⇒
           logger.info(s"Cancel exists cron job, $command, $jobId")
           center.crontab ! UnSchedule(jobId)
-          center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
+          center.crontab ! CronTab.Schedule(self, command, CronExpression(fixedCron))
       }
-      center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
-    case cronSchedule@CronTab.Scheduled(jobId, recipient, message) ⇒
+      center.crontab ! CronTab.Schedule(self, command, CronExpression(fixedCron))
+    case cronSchedule@CronTab.Scheduled(jobId, _, message) ⇒
       logger.info(s"CronSchedule $cronSchedule was start")
       cronCache += (message → jobId)
     case UnScheduled(jobId) ⇒
@@ -90,11 +91,11 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
   }
 
   def start(key: String): Unit = {
-    center.context.getContext[StreamContext](key).config.__dict__[String](StreamMetadata.FCron) match {
-      case Some(cron) ⇒
+    center.context.getContext[StreamContext](key).config.cronOption match {
+      case Some(cron) if cron.nonEmpty ⇒
         self ! CronCommand(Streams.Start(key), cron)
-      case None ⇒
-        loadTemplate(key, cache = true) match {
+      case _ ⇒
+        loadTemplate(key) match {
           case Some(result) ⇒
             result.onComplete {
               case Success(template) ⇒ self ! ExecuteStream(key, template)
@@ -123,19 +124,23 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
         }
       })
     logger.info(s"$key stream will executed")
+    val (_, resultListener) = streamLogic(key, center)
+    resultListener.onComplete {
+      case Success(v) ⇒ logger.info(s"$key was completed, $v")
+      case Failure(e) ⇒ logger.error(s"$key execute failed", e)
+    }
     streamStates += key → StreamState(streamLogic(key, center))
   }
 
   private def loadTemplate(streamId: String, cache: Boolean = true): Option[Future[String]] = {
     val streamContext = center.context.getContext[StreamContext](streamId)
-    val template = streamContext.config.__dict__[String](StreamMetadata.FTemplate).orElse {
-      streamContext.task().config.__dict__[String](TaskMetadata.FTemplate)
-    }
+    val template = streamContext.config.template.orElse(streamContext.task().config.template)
     template.map {
       case defined if defined.startsWith("git:") ⇒
-        cache match {
-          case true ⇒ center.gitClient.cacheContent(defined)
-          case false ⇒ center.gitClient.content(defined)
+        if (cache) {
+          center.gitClient.cacheContent(defined)
+        } else {
+          center.gitClient.content(defined)
         }
       case defined ⇒ Future.successful(defined)
     }

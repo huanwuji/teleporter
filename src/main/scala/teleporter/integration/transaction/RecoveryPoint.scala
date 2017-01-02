@@ -7,7 +7,6 @@ import teleporter.integration.cluster.broker.PersistentProtocol.Keys
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.rpc.proto.Rpc.{AtomicKV, EventType, TeleporterEvent}
 import teleporter.integration.component.KafkaComponent.KafkaLocation
-import teleporter.integration.core.TeleporterConfig.SourceConfig
 import teleporter.integration.core._
 import teleporter.integration.utils.Jackson
 
@@ -27,8 +26,8 @@ trait RecoveryPoint[T] {
   def complete(key: String): Unit
 }
 
-class DefaultRecoveryPoint()(implicit center: TeleporterCenter) extends RecoveryPoint[SourceConfig] {
-  override def save(key: String, point: SourceConfig): Unit = {
+class DefaultRecoveryPoint()(implicit center: TeleporterCenter) extends RecoveryPoint[SourceMetaBean] {
+  override def save(key: String, point: SourceMetaBean): Unit = {
     val sourceContext = center.context.getContext[SourceContext](key)
     val kv = AtomicKV.newBuilder()
       .setKey(key)
@@ -47,7 +46,7 @@ class DefaultRecoveryPoint()(implicit center: TeleporterCenter) extends Recovery
   override def complete(key: String): Unit = {
     val streamKey = Keys.mapping(key, Keys.SOURCE, Keys.STREAM)
     val streamConfig = center.context.getContext[StreamContext](key).config
-    val targetStreamConfig = streamConfig ++ (StreamMetadata.FStatus → StreamStatus.COMPLETE)
+    val targetStreamConfig = streamConfig.status(StreamStatus.COMPLETE)
     val kv = AtomicKV.newBuilder()
       .setKey(streamKey)
       .setExpect(Jackson.mapper.writeValueAsString(streamConfig.toMap))

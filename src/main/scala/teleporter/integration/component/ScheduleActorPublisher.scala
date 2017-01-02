@@ -6,12 +6,12 @@ import akka.actor.Cancellable
 import akka.stream.actor.ActorPublisher
 import akka.stream.actor.ActorPublisherMessage.{Cancel, Request}
 import com.typesafe.scalalogging.LazyLogging
-import teleporter.integration.core.TeleporterConfig._
+import teleporter.integration.component.ScheduleActorPublisherMessage.{PageAttrs, TimeAttrs}
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics.{Measurement, Tags}
+import teleporter.integration.metrics.MetricsCounter
 import teleporter.integration.transaction.Transaction
-import teleporter.integration.utils.Converters._
-import teleporter.integration.utils.{Dates, MapBean, MapMetadata}
+import teleporter.integration.utils.{Dates, MapBean, MapMetaBean}
 
 import scala.annotation.tailrec
 import scala.concurrent.duration.{Duration, FiniteDuration, _}
@@ -21,7 +21,7 @@ import scala.util.{Failure, Success}
 /**
   * Created by kui.dai on 2016/7/11.
   */
-trait ScheduleMetadata extends MapMetadata {
+object ScheduleMetaBean {
   val FSchedule = "schedule"
   val FPage = "page"
   val FPageSize = "pageSize"
@@ -32,19 +32,48 @@ trait ScheduleMetadata extends MapMetadata {
   val FEnd = "end"
   val FPeriod = "period"
   val FMaxPeriod = "maxPeriod"
-
-  def update(config: MapBean, rollPage: RollPage): MapBean = config ++ (FSchedule, FPage → rollPage.currPage)
-
-  def update(config: MapBean, rollTime: RollTime): MapBean = config ++ (FSchedule, FStart → rollTime.start, FEnd → rollTime.end)
-
-  def isContinuous()(implicit config: MapBean) = config.__dict__[String](FSchedule, FDeadline).exists(_.contains("fromNow"))
-
-  def isTimerRoller()(implicit config: MapBean) = config.__dict__[Duration](FSchedule, FPeriod).isDefined
-
-  def isPageRoller()(implicit config: MapBean) = config.__dict__[Int](FSchedule, FPage).isDefined
 }
 
-object ScheduleActorPublisherMessage extends ScheduleMetadata {
+class ScheduleMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
+
+  import ScheduleMetaBean._
+
+  def update(pageAttrs: PageAttrs): ScheduleMetaBean = {
+    MapMetaBean[ScheduleMetaBean](this ++ (FSchedule, FPage → asString(pageAttrs.page), FOffset → asString(pageAttrs.page * pageAttrs.pageSize)))
+  }
+
+  def update(timeAttrs: TimeAttrs): ScheduleMetaBean = {
+    MapMetaBean[ScheduleMetaBean](this ++ (FSchedule, FStart → asString(timeAttrs.start), FEnd → asString(timeAttrs.end)))
+  }
+
+  def schedule: MapBean = this.get[MapBean](FSchedule).getOrElse(MapBean.empty)
+
+  def isContinuous: Boolean = this.get[String](FSchedule, FDeadline).exists(_.contains("fromNow"))
+
+  def isTimerRoller: Boolean = this.get[Duration](FSchedule, FPeriod).isDefined
+
+  def isPageRoller: Boolean = this.get[Int](FSchedule, FPage).isDefined
+
+  def page: Int = schedule.get[Int](FPage).getOrElse(0)
+
+  def pageSize: Int = schedule.get[Int](FPageSize).getOrElse(0)
+
+  def maxPage: Int = schedule.get[Int](FMaxPage).getOrElse(0)
+
+  def offset: Int = schedule.get[Int](FOffset).getOrElse(0)
+
+  def deadlineOption: Option[String] = schedule.get[String](FDeadline)
+
+  def start: LocalDateTime = schedule.get[LocalDateTime](FStart).getOrElse(LocalDateTime.MIN)
+
+  def end: LocalDateTime = schedule.get[LocalDateTime](FEnd).getOrElse(LocalDateTime.MIN)
+
+  def period: Duration = schedule.get[Duration](FPeriod).getOrElse(Duration.Undefined)
+
+  def maxPeriod: Duration = schedule.get[Duration](FMaxPeriod).getOrElse(period)
+}
+
+object ScheduleActorPublisherMessage {
 
   sealed trait Action
 
@@ -63,20 +92,23 @@ object ScheduleActorPublisherMessage extends ScheduleMetadata {
   case class TimeAttrs(start: LocalDateTime, end: LocalDateTime, period: Duration, maxPeriod: Duration, deadline: () ⇒ LocalDateTime)
 
   case class ScheduleSetting(
+                              scheduleMetaBean: ScheduleMetaBean,
                               pageAttrs: Option[PageAttrs],
                               timeAttrs: Option[TimeAttrs],
                               isContinuous: Boolean
                             ) {
-    def merge(config: SourceConfig): SourceConfig = {
-      config ++ (FSchedule, pageAttrs.map(p ⇒ Array(FPage → asString(p.page), FOffset → asString(p.page * p.pageSize)))
-        .getOrElse(timeAttrs.map(t ⇒ Array(FStart → asString(t.start), FEnd → asString(t.end))).getOrElse(Array.empty)): _*)
+    def updated(): ScheduleSetting = {
+      val _scheduleMetaBean = pageAttrs.map(scheduleMetaBean.update)
+        .flatMap(metaBean ⇒ timeAttrs.map(MapMetaBean[ScheduleMetaBean](metaBean).update))
+        .getOrElse(scheduleMetaBean)
+      this.copy(scheduleMetaBean = _scheduleMetaBean)
     }
 
-    def updated(start: LocalDateTime, end: LocalDateTime): ScheduleSetting = {
+    def updateTime(start: LocalDateTime, end: LocalDateTime): Unit = {
       this.copy(timeAttrs = timeAttrs.map(_.copy(start = start, end = end)))
     }
 
-    def updated(page: Int): ScheduleSetting = {
+    def updatePage(page: Int): Unit = {
       this.copy(pageAttrs = pageAttrs.map(_.copy(page = page)))
     }
   }
@@ -109,60 +141,56 @@ object ScheduleActorPublisherMessage extends ScheduleMetadata {
   }
 
   object ScheduleSetting {
-    def apply(config: MapBean): ScheduleSetting = {
-      val scheduleConfig = config[MapBean](FSchedule)
-      val _isContinuous = isContinuous()(config)
-      val _isTimeRoller = isTimerRoller()(config)
-      val _isPageRoller = isPageRoller()(config)
-      val timeSetting = _isTimeRoller match {
-        case true ⇒
-          val deadline: () ⇒ LocalDateTime = scheduleConfig.__dict__[String](FDeadline) match {
-            case Some("") | None ⇒ throw new IllegalArgumentException(s"deadline is required, $scheduleConfig")
-            case Some("now") ⇒
-              val now = LocalDateTime.now(); () ⇒ now
-            case Some("fromNow") ⇒
-              () ⇒ LocalDateTime.now()
-            case Some(offsetDeadline) if offsetDeadline.endsWith(".fromNow") ⇒ //1.minutes.fromNow
-              val duration = Duration(offsetDeadline.substring(0, offsetDeadline.lastIndexOf(".")))
-              () ⇒ LocalDateTime.now().minusSeconds(duration.toSeconds)
-            case Some(dateTimeStr) ⇒
-              val dateTime = LocalDateTime.parse(dateTimeStr, Dates.DEFAULT_DATE_FORMATTER)
-              () ⇒ dateTime
-          }
-          val period = scheduleConfig.__dict__[Duration](FPeriod).getOrElse(Duration.Undefined)
-          TimeAttrs(
-            start = scheduleConfig.__dict__[LocalDateTime](FStart).getOrElse(LocalDateTime.MIN),
-            end = scheduleConfig.__dict__[LocalDateTime](FEnd).getOrElse(LocalDateTime.MIN),
-            period = period,
-            maxPeriod = scheduleConfig.__dict__[Duration](FMaxPeriod).getOrElse(period),
-            deadline = deadline
-          )
-        case false ⇒ null
+    def apply(config: SourceMetaBean): ScheduleSetting = {
+      val scheduleConfig = config.mapTo[ScheduleMetaBean]
+      val timeSetting = if (scheduleConfig.isTimerRoller) {
+        val deadline: () ⇒ LocalDateTime = scheduleConfig.deadlineOption match {
+          case Some("") | None ⇒ throw new IllegalArgumentException(s"deadline is required, $scheduleConfig")
+          case Some("now") ⇒
+            val now = LocalDateTime.now(); () ⇒ now
+          case Some("fromNow") ⇒
+            () ⇒ LocalDateTime.now()
+          case Some(offsetDeadline) if offsetDeadline.endsWith(".fromNow") ⇒ //1.minutes.fromNow
+            val duration = Duration(offsetDeadline.substring(0, offsetDeadline.lastIndexOf(".")))
+            () ⇒ LocalDateTime.now().minusSeconds(duration.toSeconds)
+          case Some(dateTimeStr) ⇒
+            val dateTime = LocalDateTime.parse(dateTimeStr, Dates.DEFAULT_DATE_FORMATTER)
+            () ⇒ dateTime
+        }
+        TimeAttrs(
+          start = scheduleConfig.start,
+          end = scheduleConfig.end,
+          period = scheduleConfig.period,
+          maxPeriod = scheduleConfig.maxPeriod,
+          deadline = deadline
+        )
+      } else {
+        null
       }
-      val pageSetting = _isPageRoller match {
-        case true ⇒
-          PageAttrs(
-            page = scheduleConfig.__dict__[Int](FPage).getOrElse(0),
-            pageSize = scheduleConfig.__dict__[Int](FPageSize).getOrElse(0),
-            maxPage = scheduleConfig.__dict__[Int](FMaxPage).getOrElse(0),
-            offset = scheduleConfig.__dict__[Int](FOffset).getOrElse(0)
-          )
-        case false ⇒ null
+      val pageSetting = if (scheduleConfig.isPageRoller) {
+        PageAttrs(
+          page = scheduleConfig.page,
+          pageSize = scheduleConfig.pageSize,
+          maxPage = scheduleConfig.maxPage,
+          offset = scheduleConfig.offset
+        )
+      } else {
+        null
       }
       ScheduleSetting(
+        scheduleMetaBean = scheduleConfig,
         pageAttrs = Option(pageSetting),
         timeAttrs = Option(timeSetting),
-        isContinuous = _isContinuous
+        isContinuous = scheduleConfig.isContinuous
       )
     }
   }
 
 }
 
-
 trait ScheduleActorPublisher[T, A]
   extends ActorPublisher[TeleporterMessage[T]]
-    with Component with SourceMetadata with ScheduleMetadata
+    with Component
     with LazyLogging {
 
   private implicit val _center: TeleporterCenter = center
@@ -170,14 +198,14 @@ trait ScheduleActorPublisher[T, A]
   import ScheduleActorPublisherMessage._
 
   implicit val executionContext: ExecutionContext
-  protected val transaction = Transaction[T, SourceConfig](key, center.defaultRecoveryPoint)
+  protected val transaction: Transaction[T, SourceMetaBean] = Transaction[T, SourceMetaBean](key, center.defaultRecoveryPoint)
   protected var client: A = _
   protected var drillStack: DrillStack = _
   private var scheduleSetting: ScheduleSetting = _
-  private var config: SourceConfig = _
+  protected var sourceContext: SourceContext = _
   private var _iterator: Iterator[T] = _
   protected var enforcer: Enforcer = _
-  val counter = center.metricsRegistry.counter(Measurement(key, Seq(Tags.success)))
+  val counter: MetricsCounter = center.metricsRegistry.counter(Measurement(key, Seq(Tags.success)))
 
   import transaction._
 
@@ -190,12 +218,10 @@ trait ScheduleActorPublisher[T, A]
   override def receive: Receive = ({
     case ClientInit ⇒
       try {
-        val sourceContext = center.context.getContext[SourceContext](key)
-        config = sourceContext.config
-        enforcer = Enforcer(key, config)
-        client = center.components.address[A](sourceContext.addressKey)
-        scheduleSetting = ScheduleSetting(config)
-        config = scheduleSetting.merge(config)
+        sourceContext = center.context.getContext[SourceContext](key)
+        enforcer = Enforcer(key, sourceContext.config)
+        client = center.components.address[A](sourceContext.config.address)
+        scheduleSetting = ScheduleSetting(sourceContext.config)
         val drillActions = Seq.newBuilder[Action]
         if (scheduleSetting.timeAttrs.isDefined) drillActions += NextTime
         if (scheduleSetting.pageAttrs.isDefined) drillActions += NextPage
@@ -223,8 +249,7 @@ trait ScheduleActorPublisher[T, A]
         || (!scheduleSetting.isContinuous && distance > 0)) {
         val nanos = distance min timeAttrs.maxPeriod.toNanos min timeAttrs.period.toNanos
         val end = start.plusNanos(nanos)
-        scheduleSetting = scheduleSetting.updated(start, end)
-        config = scheduleSetting.merge(config)
+        scheduleSetting.updateTime(start, end)
         self ! drillStack.drill(Down)
       } else if (scheduleSetting.isContinuous) {
         context.system.scheduler.scheduleOnce(timeAttrs.period.asInstanceOf[FiniteDuration], self, drillStack.current)
@@ -239,27 +264,26 @@ trait ScheduleActorPublisher[T, A]
             if (drillStack.first) {
               doComplete()
             } else {
-              scheduleSetting = scheduleSetting.updated(0)
+              scheduleSetting.updatePage(0)
               self ! drillStack.drill(Up)
             }
           } else {
             val page = pageAttrs.page + 1
-            scheduleSetting = scheduleSetting.updated(page)
-            config = scheduleSetting.merge(config)
+            scheduleSetting.updatePage(page)
             self ! drillStack.drill(Down)
           }
         case Down ⇒
           self ! drillStack.drill(Down)
       }
     case Grab ⇒
-      _grab(config)
+      _grab()
     case Deliver ⇒
       deliver()
   }
 
-  protected def _grab(config: MapBean): Unit = {
+  protected def _grab(): Unit = {
     drillStack.count = 0
-    grab(config).onComplete {
+    grab(scheduleSetting.updated()).onComplete {
       case Success(it) ⇒
         _iterator = it
         self ! Deliver
@@ -267,13 +291,13 @@ trait ScheduleActorPublisher[T, A]
     }
   }
 
-  protected def grab(config: MapBean): Future[Iterator[T]]
+  protected def grab(config: ScheduleSetting): Future[Iterator[T]]
 
   var cancellable: Cancellable = _
 
-  def doComplete() = {
+  def doComplete(): Unit = {
     if (!scheduleSetting.isContinuous) {
-      if (!isComplete()) {
+      if (!isComplete) {
         cancellable = context.system.scheduler.scheduleOnce(5.seconds, self, Deliver)
       } else {
         if (cancellable != null && !cancellable.isCancelled) cancellable.cancel()
@@ -286,7 +310,7 @@ trait ScheduleActorPublisher[T, A]
   @tailrec
   final def deliver(): Unit = {
     if (totalDemand > 0 && isActive) {
-      tryBegin(config, {
+      tryBegin(scheduleSetting.scheduleMetaBean, {
         drillStack.count += 1
         drillStack.totalCount += 1
         Component.getIfPresent(_iterator)
@@ -301,7 +325,7 @@ trait ScheduleActorPublisher[T, A]
             self ! drillStack.drill(Up)
           }
         case Transaction.OverLimit ⇒
-          context.system.scheduler.scheduleOnce(5.seconds, self, Deliver)
+          context.system.scheduler.scheduleOnce(1.seconds, self, Deliver)
       }
     }
   }

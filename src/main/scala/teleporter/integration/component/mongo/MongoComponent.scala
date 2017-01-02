@@ -2,56 +2,72 @@ package teleporter.integration.component.mongo
 
 import org.mongodb.scala.{Document, MongoClient, MongoCollection}
 import teleporter.integration._
-import teleporter.integration.component.{MongoMessage, ScheduleActorPublisher}
+import teleporter.integration.component.ScheduleActorPublisherMessage.ScheduleSetting
+import teleporter.integration.component.{MongoMessage, ScheduleActorPublisher, ScheduleMetaBean}
 import teleporter.integration.core._
 import teleporter.integration.script.Template
 import teleporter.integration.utils.Converters._
-import teleporter.integration.utils.{MapBean, MapMetadata}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
   * Created by joker on 15/12/07
   */
-trait MongoAddressMetadata extends MapMetadata {
+object MongoAddressMetaBean {
   val FUrl = "url"
 }
 
-trait MongoPublisherMetadata extends MongoAddressMetadata with SourceMetadata {
+class MongoAddressMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
+
+  import MongoAddressMetaBean._
+
+  def url: String = client[String](FUrl)
+}
+
+object MongoPublisherMetaBean {
   val FDatabase = "database"
   val FCollection = "collection"
   val FQuery = "query"
+}
 
-  def lnsDatabase(implicit config: MapBean): String = config[String](FClient, FDatabase)
+class MongoPublisherMetaBean(override val underlying: Map[String, Any]) extends ScheduleMetaBean(underlying) {
 
-  def lnsCollection(implicit config: MapBean): String = config[String](FClient, FCollection)
+  import MongoPublisherMetaBean._
+
+  def database: String = client[String](FDatabase)
+
+  def collection: String = client[String](FCollection)
+
+  def query: Option[String] = client.get[String](FQuery)
 }
 
 class MongoPublisher(override val key: String)(implicit val center: TeleporterCenter)
-  extends ScheduleActorPublisher[MongoMessage, MongoClient]
-    with MongoPublisherMetadata {
+  extends ScheduleActorPublisher[MongoMessage, MongoClient] {
   override implicit val executionContext: ExecutionContext = context.dispatcher
   var collection: MongoCollection[Document] = _
 
-  override protected def grab(config: MapBean): Future[Iterator[Document]] = {
+  override protected def grab(scheduleSetting: ScheduleSetting): Future[Iterator[Document]] = {
+    val config = scheduleSetting.scheduleMetaBean.mapTo[MongoPublisherMetaBean]
     if (collection == null) {
-      val database = client.getDatabase(lnsDatabase(config))
-      collection = database.getCollection(lnsCollection(config))
+      val database = client.getDatabase(config.database)
+      collection = database.getCollection(config.collection)
     }
-    val scheduleConfig = config[MapBean](FSchedule)
-    val filter = scheduleConfig.__dict__[String](FQuery).map(s ⇒ Document(Template(s, scheduleConfig.toMap))).getOrElse(Document())
+    val filter = config.query.map(s ⇒ Document(Template(s, config.schedule.toMap))).getOrElse(Document())
     val query = collection.find(filter)
-    if (isPageRoller()(config)) {
-      query.skip(scheduleConfig[Int](FOffset)).limit(scheduleConfig[Int](FPageSize))
+    scheduleSetting.pageAttrs match {
+      case Some(pageAttrs) ⇒
+        query.skip(pageAttrs.offset).limit(pageAttrs.pageSize)
+      case _ ⇒
     }
     query.toFuture().map(_.toIterator)
   }
 }
 
-object MongoComponent extends AddressMetadata with MongoAddressMetadata {
+object MongoComponent {
   def mongoApply: ClientApply = (key, center) ⇒ {
     val config = center.context.getContext[AddressContext](key).config
-    val mongoClient = MongoClient(config[String](FClient, FUrl))
+    val mongoMetaBean = config.client.mapTo[MongoAddressMetaBean]
+    val mongoClient = MongoClient(config[String](mongoMetaBean.url))
     new AutoCloseClientRef[MongoClient](key, mongoClient)
   }
 }

@@ -6,19 +6,20 @@ import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys}
 import teleporter.integration.cluster.broker.leveldb.LevelDBService
 import teleporter.integration.cluster.broker.mongo.MongoDBService
 import teleporter.integration.cluster.broker.rocksdb.RocksDBService
-import teleporter.integration.component.leveldb.LevelDBs
-import teleporter.integration.component.rocksdb.RocksDBs
-import teleporter.integration.core.TeleporterConfig
-import teleporter.integration.utils.Jackson
+import teleporter.integration.component.kv.leveldb.LevelDBs
+import teleporter.integration.component.kv.rocksdb.RocksDBs
+import teleporter.integration.utils.Converters._
+import teleporter.integration.utils.{Jackson, MapBean, MapMetaBean}
 
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext
-import scala.reflect._
+import scala.reflect.ClassTag
+import scala.util.matching.Regex
 
 /**
   * Created by kui.dai on 2016/7/15.
   */
 trait PersistentService {
-
   def id(): Long
 
   def range(key: String, start: Int = 0, limit: Int = Int.MaxValue): Seq[KeyValue]
@@ -39,7 +40,29 @@ trait PersistentService {
 
   def get(key: String): Option[KeyValue]
 
-  def put(key: String, value: String): Unit
+  def put(key: String, value: String): KeyValue = {
+    val map = Jackson.mapper.readValue[Map[String, Any]](value)
+    val newValue = map.get("id") match {
+      case Some(id) if id != null && asString(id).nonEmpty ⇒ value
+      case _ ⇒
+        val newMap = this.synchronized {
+          get(key) match {
+            case Some(kv) ⇒
+              val oldMap = Jackson.mapper.readValue[mutable.Map[String, Any]](kv.value)
+              oldMap.get("id") match {
+                case Some(id) if id != null && asString(id).nonEmpty ⇒ map + ("id" → id)
+                case _ ⇒ map + ("id" → id())
+              }
+            case None ⇒ map + ("id" → id())
+          }
+        }
+        Jackson.mapper.writeValueAsString(newMap)
+    }
+    unsafePut(key, newValue)
+    KeyValue(key, newValue)
+  }
+
+  protected def unsafePut(key: String, value: String): Unit
 
   def delete(key: String): Unit
 
@@ -71,7 +94,7 @@ object PersistentProtocol {
   }
 
   object Keys {
-    val delimiter = ":(\\w+)".r
+    val delimiter: Regex = ":(\\w+)".r
 
     //{tasks:[], instances:[]}
     val GROUP = "/group/:ns/:group"
@@ -136,7 +159,7 @@ object PersistentProtocol {
       unapply(key, "/:table")("table")
     }
 
-    val tailRegexSplit = "[^\\w/]".r
+    val tailRegexSplit: Regex = "[^\\w/]".r
 
     def belongRegex(tailRegex: String, key: String): Boolean = {
       tailRegexSplit.findFirstMatchIn(tailRegex) match {
@@ -144,7 +167,7 @@ object PersistentProtocol {
           val prefixKey = tailRegex.substring(0, m.start)
           val regex = tailRegex.substring(m.start).r
           key.substring(0, m.start) == prefixKey && regex.findPrefixOf(key.substring(m.start)).isDefined
-        case None ⇒ tailRegex == key
+        case None ⇒ key.startsWith(tailRegex)
       }
     }
   }
@@ -152,7 +175,7 @@ object PersistentProtocol {
   object Values {
 
     trait Value {
-      def toJson = Jackson.mapper.writeValueAsString(this)
+      def toJson: String = Jackson.mapper.writeValueAsString(this)
     }
 
     object InstanceStatus {
@@ -174,7 +197,7 @@ object PersistentProtocol {
 
     case class InstanceValue(id: Long, group: String) extends Value
 
-    case class TaskValue(instances: Set[String], group: String)
+    case class TaskValue(group: String)
 
     case class PartitionValue(id: Long, keys: Set[String]) extends Value
 
@@ -187,7 +210,9 @@ object PersistentProtocol {
   case class KeyValue(key: String, value: String) extends Key {
     def keyBean[T: Manifest]: KeyBean[T] = KeyBean(key, Jackson.mapper.readValue[T](value))
 
-    def config: KeyBean[TeleporterConfig] = KeyBean(key, TeleporterConfig(Jackson.mapper.readValue[Map[String, Any]](value)))
+    def mapBean: KeyBean[MapBean] = KeyBean(key, MapBean(Jackson.mapper.readValue[Map[String, Any]](value)))
+
+    def metaBean[T <: MapBean : ClassTag] = KeyBean(key, MapMetaBean[T](Jackson.mapper.readValue[Map[String, Any]](value)))
   }
 
   case class AtomicKeyValue(key: String, expect: String, update: String)

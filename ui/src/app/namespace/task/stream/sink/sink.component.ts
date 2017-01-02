@@ -1,7 +1,6 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
+import {ActivatedRoute, Router} from "@angular/router";
 import {SinkService, Sink} from "./sink.service";
-import {Location} from "@angular/common";
 import {KeyBean} from "../../../../rest.servcie";
 import {FormItemBase} from "../../../../dynamic/form/form-item";
 import {FormGroup, FormControl} from "@angular/forms";
@@ -32,7 +31,7 @@ export class SinkListComponent implements OnInit {
   }
 
   list() {
-    this.sinkService.range(`/sink/${this.ns}/${this.task}/${this.stream}`, 0, 2000)
+    this.sinkService.range(`/sink/${this.ns}/${this.task}/${this.stream}`)
       .then(kbs => this.kbs = kbs);
   }
 
@@ -60,7 +59,7 @@ export class SinkDetailComponent implements OnInit {
   private stream: string;
   private key: string;
 
-  constructor(public route: ActivatedRoute, public location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               public sinkService: SinkService, private formItemService: FormItemService) {
   }
 
@@ -104,7 +103,7 @@ export class SinkDetailComponent implements OnInit {
   onSubmit() {
     let sink = this.formGroup.value;
     this.sinkService.save(this.fullKey(sink.key), sink)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${sink.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

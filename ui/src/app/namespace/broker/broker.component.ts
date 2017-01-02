@@ -1,6 +1,5 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
-import {Location} from "@angular/common";
+import {ActivatedRoute, Router} from "@angular/router";
 import {BrokerService, Broker} from "./broker.service";
 import {KeyBean} from "../../rest.servcie";
 import {FormGroup, FormControl} from "@angular/forms";
@@ -26,7 +25,7 @@ export class BrokerListComponent implements OnInit {
   }
 
   list() {
-    this.brokerService.range(`/broker/${this.ns}`, 0, 2000)
+    this.brokerService.range(`/broker/${this.ns}`)
       .then((kbs: KeyBean<Broker>[]) => this.kbs = kbs);
   }
 
@@ -52,7 +51,7 @@ export class BrokerDetailComponent implements OnInit {
   private ns: string;
   private key: string;
 
-  constructor(private route: ActivatedRoute, private location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               private brokerService: BrokerService, private formItemService: FormItemService) {
   }
 
@@ -85,7 +84,7 @@ export class BrokerDetailComponent implements OnInit {
   onSubmit() {
     let broker = this.formGroup.value;
     this.brokerService.save(this.fullKey(broker.key), broker)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${broker.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

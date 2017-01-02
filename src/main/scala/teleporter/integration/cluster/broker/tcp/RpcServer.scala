@@ -6,6 +6,7 @@ import akka.stream.scaladsl.{Framing, Sink, Source, Tcp}
 import akka.stream.{ActorMaterializer, Attributes, OverflowStrategy}
 import akka.util.ByteString
 import com.typesafe.scalalogging.LazyLogging
+import teleporter.integration.cluster.broker.ConfigNotify.{Remove, Upsert}
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys
 import teleporter.integration.cluster.broker.PersistentProtocol.Values.{toString ⇒ _, _}
 import teleporter.integration.cluster.broker.PersistentService
@@ -15,6 +16,7 @@ import teleporter.integration.cluster.rpc.proto.TeleporterRpc
 import teleporter.integration.cluster.rpc.proto.TeleporterRpc.EventHandle
 import teleporter.integration.cluster.rpc.proto.broker.Broker._
 import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify
+import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify.Action
 import teleporter.integration.utils.EventListener
 
 import scala.collection.JavaConverters._
@@ -31,6 +33,7 @@ case class ConnectionKeeper(senderRef: ActorRef, receiverRef: ActorRef)
 
 class EventReceiveActor(configService: PersistentService,
                         runtimeService: PersistentService,
+                        configNotify: ActorRef,
                         connectionKeepers: TrieMap[String, ConnectionKeeper],
                         eventListener: EventListener[TeleporterEvent])
   extends Actor with LazyLogging {
@@ -44,12 +47,14 @@ class EventReceiveActor(configService: PersistentService,
   override def receive: Receive = {
     case Status.Failure(cause) ⇒
       self ! InstanceOffline(this.currInstance)
+      logger.error(cause.getMessage, cause)
       connectionKeepers -= this.currInstance
     case Complete ⇒
       self ! InstanceOffline(this.currInstance)
       throw new RuntimeException("Error, Connection can't closed!")
     case RegisterSender(ref) ⇒ senderRef = ref
     case StartPartition(partition, instance) ⇒
+      logger.info(s"Assign $partition to $instance")
       runtimeService.put(partition, Version().toJson)
       connectionKeepers.get(instance).foreach { keeper ⇒
         eventListener.asyncEvent { seqNr ⇒
@@ -104,7 +109,9 @@ class EventReceiveActor(configService: PersistentService,
               }
         }
     case ReBalance(group, instance) ⇒ reBalance(group, instance)
-    case event: TeleporterEvent ⇒
+    case event: TeleporterEvent if event.getRole == TeleporterEvent.Role.SERVER ⇒
+      defaultEventHandle.apply((event.getType, event))
+    case event: TeleporterEvent if event.getRole == TeleporterEvent.Role.CLIENT ⇒
       eventHandle.orElse(configEventHandle).orElse(defaultEventHandle).apply((event.getType, event))
   }
 
@@ -163,9 +170,23 @@ class EventReceiveActor(configService: PersistentService,
       val kv = KV.parseFrom(event.getBody)
       configService.put(key = kv.getKey, value = kv.getValue)
       senderRef ! TeleporterRpc.success(event)
+    case (EventType.KVRemove, event) ⇒
+      val remove = KVRemove.parseFrom(event.getBody)
+      configService.delete(key = remove.getKey)
+      senderRef ! TeleporterRpc.success(event)
     case (EventType.AtomicSaveKV, event) ⇒
       val atomicSave = AtomicKV.parseFrom(event.getBody)
-      configService.atomicPut(atomicSave.getKey, atomicSave.getExpect, atomicSave.getUpdate)
+      if (configService.atomicPut(atomicSave.getKey, atomicSave.getExpect, atomicSave.getUpdate)) {
+        senderRef ! TeleporterRpc.success(event)
+      } else {
+        senderRef ! TeleporterRpc.failure(event)
+      }
+    case (EventType.ConfigChangeNotify, event) ⇒
+      val notify = ConfigChangeNotify.parseFrom(event.getBody)
+      notify.getAction match {
+        case Action.ADD | Action.UPDATE | Action.UPSERT ⇒ Upsert(notify.getKey)
+        case Action.REMOVE ⇒ configNotify ! Remove(notify.getKey)
+      }
       senderRef ! TeleporterRpc.success(event)
   }
 
@@ -179,7 +200,9 @@ class EventReceiveActor(configService: PersistentService,
   }
 
   def reBalance(groupKey: String, currInstance: Option[String] = None): Unit = {
-    val group = configService.apply(groupKey).keyBean[GroupValue]
+    val groupOpt = configService.get(groupKey).map(_.keyBean[GroupValue])
+    require(groupOpt.isDefined, s"Please config group: $groupKey in the ui")
+    val group = groupOpt.get
     val tasks = group.value.tasks
     //online instance
     val instances = group.value.instances.filter(runtimeService.get(_).map(_.keyBean[RuntimeInstanceValue])
@@ -251,6 +274,7 @@ object RpcServer extends LazyLogging {
   def apply(host: String, port: Int,
             configService: PersistentService,
             runtimeService: PersistentService,
+            configNotify: ActorRef,
             connectionKeepers: TrieMap[String, ConnectionKeeper],
             eventListener: EventListener[TeleporterEvent])(implicit mater: ActorMaterializer): Future[Tcp.ServerBinding] = {
     implicit val system = mater.system
@@ -258,17 +282,17 @@ object RpcServer extends LazyLogging {
     Tcp().bind(host, port, idleTimeout = 2.minutes).to(Sink.foreach {
       connection ⇒
         logger.info(s"New connection from: ${connection.remoteAddress}")
-        val eventReceiver = system.actorOf(Props(classOf[EventReceiveActor], configService, runtimeService, connectionKeepers, eventListener))
+        val eventReceiver = system.actorOf(Props(classOf[EventReceiveActor], configService, runtimeService, configNotify, connectionKeepers, eventListener))
         try {
           Source.actorRef[TeleporterEvent](1000, OverflowStrategy.fail)
-            .log("server-receive")
+            .log("server-response")
             .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
             .map(m ⇒ ByteString(m.toByteArray))
             .watchTermination() { case (ref, fu) ⇒ eventReceiver ! RegisterSender(ref); fu }
             .via(Framing.simpleFramingProtocol(10 * 1024 * 1024).join(connection.flow))
             .filter(_.nonEmpty)
             .map(bs ⇒ TeleporterEvent.parseFrom(bs.toArray))
-            .log("server-response")
+            .log("server-receiver")
             .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
             .to(Sink.actorRef(eventReceiver, Complete)).run().onComplete {
             r ⇒ logger.warn(s"Connection was closed, $r")

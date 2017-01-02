@@ -1,10 +1,11 @@
-package teleporter.integration.component.leveldb
+package teleporter.integration.component.kv.leveldb
 
 import java.io.File
 import java.util
 
 import org.iq80.leveldb.impl.Iq80DBFactory
 import org.iq80.leveldb.{DB, Options}
+import teleporter.integration.component.kv.KVOperator
 import teleporter.integration.utils.Bytes
 
 import scala.collection.concurrent.TrieMap
@@ -13,9 +14,11 @@ import scala.collection.concurrent.TrieMap
   * Created by kui.dai on 2016/7/15.
   */
 object LevelDBs {
-  val dbs = TrieMap[String, DB]()
+  val dbs: TrieMap[String, DB] = TrieMap[String, DB]()
 
-  def apply(dbName: String, path: String = "../../leveldb"): DB = {
+  var defaultPath = "../../leveldb"
+
+  def apply(dbName: String, path: String): DB = {
     dbs.getOrElseUpdate(dbName, {
       val options = new Options
       options.createIfMissing()
@@ -28,7 +31,7 @@ object LevelDBs {
   }
 
   def applyTable(dbName: String, tableName: String): LevelTable = {
-    val db = this.apply(dbName)
+    val db = this.apply(dbName, defaultPath)
     LevelTable(db, tableName)
   }
 
@@ -37,14 +40,14 @@ object LevelDBs {
   def close(): Unit = dbs.keys.foreach(close)
 }
 
-class LevelTable(db: DB, tableName: Array[Byte]) {
-  def apply(key: Array[Byte]): Array[Byte] = get(fullKey(key)).get
+class LevelTable(db: DB, tableName: Array[Byte]) extends KVOperator {
+  override def apply(key: Array[Byte]): Array[Byte] = get(fullKey(key)).get
 
-  def get(key: Array[Byte]): Option[Array[Byte]] = Option(db.get(fullKey(key)))
+  override def get(key: Array[Byte]): Option[Array[Byte]] = Option(db.get(fullKey(key)))
 
-  def put(key: Array[Byte], value: Array[Byte]): Unit = db.put(fullKey(key), value)
+  override def put(key: Array[Byte], value: Array[Byte]): Unit = db.put(fullKey(key), value)
 
-  def atomicPut(key: Array[Byte], expectValue: Array[Byte], updateValue: Array[Byte]): Boolean = {
+  override def atomicPut(key: Array[Byte], expectValue: Array[Byte], updateValue: Array[Byte]): Boolean = {
     synchronized {
       val _key = fullKey(key)
       get(_key) match {
@@ -60,12 +63,12 @@ class LevelTable(db: DB, tableName: Array[Byte]) {
     }
   }
 
-  def remove(key: Array[Byte]): Unit = db.delete(fullKey(key))
+  override def remove(key: Array[Byte]): Unit = db.delete(fullKey(key))
 
-  def range(key: Array[Byte]): Iterator[(Array[Byte], Array[Byte])] = {
+  override def range(key: Array[Byte]): Iterator[(Array[Byte], Array[Byte])] = {
     val iterator = db.iterator()
     val _key = fullKey(key)
-    iterator.seek(_key)
+    if (key.isEmpty) iterator.seekToFirst() else iterator.seek(_key)
     new Iterator[(Array[Byte], Array[Byte])] {
       var currKV: util.Map.Entry[Array[Byte], Array[Byte]] = _
 

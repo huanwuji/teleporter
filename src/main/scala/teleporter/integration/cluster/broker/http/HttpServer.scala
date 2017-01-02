@@ -8,7 +8,7 @@ import akka.http.scaladsl.server.Directives._
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 import com.typesafe.scalalogging.LazyLogging
-import de.heikoseeberger.akkahttpjson4s.Json4sSupport
+import de.heikoseeberger.akkahttpjson4s.Json4sSupport._
 import org.json4s.{DefaultFormats, native}
 import teleporter.integration.cluster.broker.ConfigNotify.{Remove, Upsert}
 import teleporter.integration.cluster.broker.PersistentProtocol.{AtomicKeyValue, KeyValue}
@@ -26,9 +26,6 @@ import scala.util.{Failure, Success}
   * Created by kui.dai on 2016/7/15.
   */
 object HttpServer extends LazyLogging {
-
-  import Json4sSupport._
-
   def apply(host: String, port: Int,
             configNotify: ActorRef,
             configService: PersistentService,
@@ -58,13 +55,11 @@ object HttpServer extends LazyLogging {
         } ~ (get & parameter('key)) {
           key ⇒ complete(configService.apply(key))
         } ~ (post & entity(as[KeyValue])) {
-          kv ⇒
-            configService.put(kv.key, kv.value)
-            complete(StatusCodes.OK)
+          kv ⇒ complete(configService.put(kv.key, kv.value))
         } ~ (delete & parameter('key)) {
           key ⇒
-            configService.delete(key)
             configNotify ! Remove(key)
+            configService.delete(key)
             complete(StatusCodes.OK)
         }
       } ~ pathPrefix("runtime") {
@@ -73,7 +68,7 @@ object HttpServer extends LazyLogging {
             complete(runtimeService.regexRange(key, start.getOrElse(0), limit.getOrElse(Int.MaxValue)))
           }
         } ~ (get & parameter('key)) {
-          key ⇒ complete(runtimeService.apply(key))
+          key ⇒ complete(runtimeService.get(key))
         } ~ (delete & parameter('key)) {
           key ⇒
             runtimeService.delete(key)
@@ -110,13 +105,13 @@ object HttpServer extends LazyLogging {
               }, source)
               handleWebSocketMessages(logFlow)
             case None ⇒
-              val flow = Flow[Message].map(m ⇒ TextMessage("Instance not Found, It's disconnection or not register"))
+              val flow = Flow[Message].map(_ ⇒ TextMessage("Instance not Found, It's disconnection or not register"))
               handleWebSocketMessages(flow)
           }
       } ~ path("ping") {
         complete("pong")
       } ~ extractUnmatchedPath {
-        path ⇒ redirect(Uri("/ui/index.html"), StatusCodes.PermanentRedirect)
+        _ ⇒ redirect(Uri("/ui/index.html"), StatusCodes.PermanentRedirect)
       }
     Http().bindAndHandle(handler = route, interface = host, port = port)
   }

@@ -26,7 +26,7 @@ class InfluxdbReporter(key: String, period: FiniteDuration)(implicit val center:
   import center.materializer
   import context.dispatcher
 
-  val client = center.components.address[InfluxdbClient](key)
+  val client: InfluxdbClient = center.components.address[InfluxdbClient](key)
 
   context.system.scheduler.schedule(period, period, self, Notify)
 
@@ -37,7 +37,7 @@ class InfluxdbReporter(key: String, period: FiniteDuration)(implicit val center:
   def reports(registry: MetricRegistry): Unit = {
     val timestamp: Long = System.currentTimeMillis()
     registry.metrics.foreach {
-      case t2@(measurement, metrics) ⇒
+      case (measurement, metrics) ⇒
         metrics match {
           case counter: MetricsCounter ⇒ report(measurement, counter.dump(), timestamp)
           case timer: MetricsTimer ⇒ report(measurement, timer.dump(), timestamp)

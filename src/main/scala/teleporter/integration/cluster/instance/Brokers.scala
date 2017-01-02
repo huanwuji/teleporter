@@ -20,9 +20,9 @@ import teleporter.integration.cluster.rpc.proto.TeleporterRpc
 import teleporter.integration.cluster.rpc.proto.TeleporterRpc._
 import teleporter.integration.cluster.rpc.proto.broker.Broker.LinkInstance
 import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify
-import teleporter.integration.core.TeleporterCenter
 import teleporter.integration.core.TeleporterConfigActor.{apply ⇒ _, _}
 import teleporter.integration.core.TeleporterContext.Remove
+import teleporter.integration.core.{PartitionContext, TeleporterCenter}
 import teleporter.integration.utils.SimpleHttpClient
 
 import scala.concurrent.duration._
@@ -51,6 +51,7 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
     case LoaderBroker(b) ⇒
       loadBrokers(b)
     case CreateConnection(broker) ⇒
+      logger.info(s"Create connection for $broker")
       val receiverRef = context.actorOf(Props(classOf[BrokerEventReceiverActor], center))
       val (senderRef, fu) = Source.actorRef[TeleporterEvent](100, OverflowStrategy.fail)
         .log("client-send")
@@ -104,34 +105,29 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
     val seedBrokerServers = brokers.split(",").map(_.split(":")).map {
       case Array(ip, port) ⇒ Http().outgoingConnection(ip, port.toInt)
     }.toSeq
-    Random.shuffle(seedBrokerServers).foreach { implicit server ⇒
-      simpleRequest[Seq[KeyValue]](RequestBuilding.Get(s"/config/range?key=${Keys.mapping(center.instanceKey, Keys.INSTANCE, Keys.BROKERS)}")).onComplete {
-        case Success(kvs) ⇒
-          kvs.map(_.keyBean[BrokerValue]).foreach { bv ⇒
-            implicit val server = Http().outgoingConnection(bv.value.ip, bv.value.port)
-            simpleRequest[String](RequestBuilding.Get("/ping")).onComplete {
-              case Success(_) ⇒ self ! CreateConnection(bv)
-              case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
-            }
-          }
-        case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
-      }
-    }
+    loadBrokers(Random.shuffle(seedBrokerServers))
   }
 
   def loadBrokers(seedBrokerServers: Seq[Flow[HttpRequest, HttpResponse, Future[Http.OutgoingConnection]]], idx: Int = 0)(implicit ec: ExecutionContext): Unit = {
     implicit val server = seedBrokerServers(idx)
-    simpleRequest[Seq[KeyValue]](RequestBuilding.Get(s"/config/range?key=${Keys.mapping(center.instanceKey, Keys.INSTANCE, Keys.BROKERS)}"))
+    val brokersKey = s"/config/range?key=${Keys.mapping(center.instanceKey, Keys.INSTANCE, Keys.BROKERS)}"
+    simpleRequest[Seq[KeyValue]](RequestBuilding.Get(brokersKey))
       .onComplete {
         case Success(kvs) ⇒
-          kvs.map(_.keyBean[BrokerValue]).foreach { bv ⇒
-            implicit val server = Http().outgoingConnection(bv.value.ip, bv.value.port)
-            simpleRequest[String](RequestBuilding.Get("/ping")).onComplete {
-              case Success(_) ⇒ self ! CreateConnection(bv)
-              case Failure(e) ⇒ logger.error(s"$bv ping failure, ${e.getLocalizedMessage}", e)
-            }
+          kvs.map(_.keyBean[BrokerValue]) match {
+            case Nil ⇒
+              logger.warn(s"Can't find brokers from $brokersKey, Please config in the ui")
+            case _ ⇒
+              kvs.map(_.keyBean[BrokerValue]).foreach { bv ⇒
+                implicit val server = Http().outgoingConnection(bv.value.ip, bv.value.port)
+                simpleRequest[String](RequestBuilding.Get("/ping")).onComplete {
+                  case Success(_) ⇒ self ! CreateConnection(bv)
+                  case Failure(e) ⇒ logger.error(s"$bv ping failure, ${e.getLocalizedMessage}", e)
+                }
+              }
           }
         case Failure(e) ⇒
+          logger.error(e.getLocalizedMessage, e)
           if (idx + 1 < seedBrokerServers.size) {
             loadBrokers(seedBrokerServers, idx + 1)
           } else {
@@ -144,10 +140,10 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
 class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends Actor with LazyLogging {
 
   var senderRef: ActorRef = _
-  val logTrace = context.actorOf(Props(classOf[LogTrace], center))
+  val logTrace: ActorRef = context.actorOf(Props(classOf[LogTrace], center))
 
   override def receive: Receive = {
-    case Status.Failure(cause) ⇒
+    case Status.Failure(cause) ⇒ logger.error(cause.getLocalizedMessage, cause)
     case Complete ⇒ throw new RuntimeException("Error, Connection is forever!")
     case RegisterSender(ref) ⇒
       this.senderRef = ref
@@ -177,13 +173,15 @@ class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends 
     case e: Throwable ⇒ logger.error(e.getMessage, e)
   }
 
-  def upsertChanged(notify: ConfigChangeNotify) = {
+  def upsertChanged(notify: ConfigChangeNotify): Unit = {
     val key = notify.getKey
     val config = center.configRef
     Keys.table(key) match {
       case Tables.partition ⇒ config ! LoadPartition(key)
       case Tables.stream ⇒ config ! LoadStream(key)
-      case Tables.task ⇒ config ! LoadTask(key)
+      case Tables.task ⇒
+        center.context.indexes.rangeTo[PartitionContext](Keys.mapping(key, Keys.TASK, Keys.PARTITIONS))
+          .foreach { case (k, _) ⇒ config ! LoadPartition(k) }
       case Tables.source ⇒ config ! LoadSource(key)
       case Tables.sink ⇒ config ! LoadSink(key)
       case Tables.address ⇒ config ! LoadAddress(key)

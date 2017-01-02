@@ -7,6 +7,7 @@ enum EventType {
     RangeRegexKV = 1;
     KVSave = 2;
     AtomicSaveKV = 3;
+    KVRemove = 4;
 
     LogRequest = 10;
     LogResponse = 11;

@@ -21,10 +21,10 @@ class Converter$Test extends FunSuite with Convert {
       "e" → Seq(Map("e1" → "e1", "e2" → 2), Map("e1" → "e1", "e2" → 2))
     )
     val bean = MapBean(data)
-    println(bean.__dict__[Int]("a"))
-    println(bean.__dict__[String]("d.d1"))
-    println(bean.__dicts__[Int]("c"))
-    println(bean.__dict__[MapBean]("d").map(_.__dict__[String]("d1")))
-    println(bean.__dicts__[MapBean]("e").head.__dict__[String]("e1"))
+    println(bean.get[Int]("a"))
+    println(bean.get[String]("d.d1"))
+    println(bean.gets[Int]("c"))
+    println(bean.get[MapBean]("d").map(_.get[String]("d1")))
+    println(bean.gets[MapBean]("e").head.get[String]("e1"))
   }
 }

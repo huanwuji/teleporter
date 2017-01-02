@@ -25,6 +25,20 @@ jdbc     |
       - source, akka-steams source, or like jdbc,kafka source for data read
       - sink, akka-streams sink, for data write
   - address, data address, like database, kafka...
+  - variable, a public variable refer
+ 
+All node can refresh, and all instance will be dynamic refresh.
+User defined exception process. Pattern `errorMessage Regex match : (DEBUG|INFO|WARN|ERROR) => Action`, Support action:
+- stream.start(duration?)
+- stream.stop(duration?)
+- stream.restart(duration?)
+- source.reload
+- source.retry(duration?)
+- source.ignore
+- sink.reload
+- sink.retry(duration?, retries?)
+- sink.ignore
+Next will collect error metrics on UI for monitor.
 
 ### Install
 for linux:
@@ -71,3 +85,7 @@ instance is only a executor streams. Write back state. Give the instance a uniqu
 The idea from camel and spring integration,  and I will use akka-streaming, reactive-streams-jvm
 Every stream has source, flow, sink. source sink is elso the publisher and subscribe.
 So I will make every thing like this. **simple,flexibility and powerful**.
+
+### Diagram
+![Alt Text](./docs/photo/teleporter-all.png "teleporter-all")
+![Alt Text](./docs/photo/teleporter-detail.png "teleporter-all")

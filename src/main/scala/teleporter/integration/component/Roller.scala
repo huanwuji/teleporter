@@ -2,9 +2,6 @@ package teleporter.integration.component
 
 import java.time.{LocalDateTime, Duration ⇒ JDuration}
 
-import teleporter.integration.utils.Converters._
-import teleporter.integration.utils.MapBean
-
 import scala.collection.Iterator._
 import scala.collection.{AbstractIterator, GenTraversableOnce, Iterator}
 import scala.concurrent.duration._
@@ -20,7 +17,7 @@ case class RollPage(currPage: Int, pageSize: Int)
 
 case class PageRoller(var page: Int, pageSize: Int, maxPage: Int = Int.MaxValue) extends Roller[RollPage] {
   private val initPage = page
-  val self = this
+  val self: PageRoller = this
   private var totalCount = 0
 
   override def hasNext: Boolean = page <= maxPage && ((page - initPage) * pageSize == totalCount)
@@ -43,18 +40,6 @@ case class PageRoller(var page: Int, pageSize: Int, maxPage: Int = Int.MaxValue)
       totalCount += 1
       (if (hasNext) cur else empty).next()
     }
-  }
-}
-
-object PageRoller extends ScheduleMetadata {
-
-  def apply(config: MapBean): Iterator[RollPage] = {
-    val scheduleConfig = config[MapBean](FSchedule)
-    PageRoller(
-      page = scheduleConfig[Int](FPage),
-      pageSize = scheduleConfig[Int](FPageSize),
-      maxPage = scheduleConfig[Int](FMaxPage)
-    )
   }
 }
 

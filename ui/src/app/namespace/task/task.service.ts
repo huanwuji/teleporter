@@ -2,13 +2,7 @@ import {Injectable} from "@angular/core";
 import {Http} from "@angular/http";
 import "rxjs/add/operator/toPromise";
 import {ConfigService, Identity} from "../../rest.servcie";
-import {
-  FormItemBase,
-  TextboxFormItem,
-  DynamicGroupFormItem,
-  TextareaFormItem,
-  ArrayFormItem
-} from "../../dynamic/form/form-item";
+import {FormItemBase, TextboxFormItem, DynamicGroupFormItem, TextareaFormItem} from "../../dynamic/form/form-item";
 
 export interface Task extends Identity {
   ns?: string;
@@ -48,7 +42,7 @@ export class TaskService extends ConfigService<Task> {
         key: 'group',
         label: 'group'
       }),
-      new ArrayFormItem({
+      new DynamicGroupFormItem({
         key: 'extraKeys',
         label: 'extraKeys'
       }),

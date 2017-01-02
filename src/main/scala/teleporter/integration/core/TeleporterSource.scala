@@ -2,10 +2,12 @@ package teleporter.integration.core
 
 import akka.actor.{ActorRef, Props}
 import akka.stream.scaladsl.Source
+import com.taobao.api.domain.Trade
 import com.typesafe.scalalogging.LazyLogging
-import teleporter.integration.component.file.FilePublisher
 import teleporter.integration.component.jdbc.JdbcPublisher
 import teleporter.integration.component.mongo.MongoPublisher
+import teleporter.integration.component.taobao.TaobaoApiPublisher
+import teleporter.integration.component.taobao.api.TradeApi
 import teleporter.integration.component.{KafkaPublisher, ShadowPublisher}
 
 import scala.collection.concurrent.TrieMap
@@ -15,12 +17,12 @@ import scala.collection.concurrent.TrieMap
   *
   * @author daikui
   */
-trait TeleporterSource extends SourceMetadata with LazyLogging {
-  var sourceApplies = TrieMap[String, (String, TeleporterCenter) ⇒ Props](
+trait TeleporterSource extends LazyLogging {
+  var sourceApplies: TrieMap[String, (String, TeleporterCenter) ⇒ Props] = TrieMap[String, (String, TeleporterCenter) ⇒ Props](
     "kafka" → { (key, center) ⇒ Props(classOf[KafkaPublisher], key, center) },
-    "dataSource" → { (key, center) ⇒ Props(classOf[JdbcPublisher], key, center).withDispatcher("akka.teleporter.blocking-io-dispatcher") },
+    "jdbc" → { (key, center) ⇒ Props(classOf[JdbcPublisher], key, center).withDispatcher("akka.teleporter.blocking-io-dispatcher") },
     "mongo" → { (key, center) ⇒ Props(classOf[MongoPublisher], key, center) },
-    "file" → { (key, center) ⇒ Props(classOf[FilePublisher], key, center) }
+    "taobao.trades.sold.get" → { (key, center) ⇒ Props(classOf[TaobaoApiPublisher[Trade]], key, TradeApi.`taobao.trades.sold.get`, center).withDispatcher("akka.teleporter.blocking-io-dispatcher") }
   )
 
   def apply[T](id: Long)(implicit center: TeleporterCenter): Source[T, ActorRef] = apply[T](center.context.getContext[SourceContext](id).key)
@@ -28,16 +30,15 @@ trait TeleporterSource extends SourceMetadata with LazyLogging {
   def apply[T](key: String)(implicit center: TeleporterCenter): Source[T, ActorRef] = {
     val system = center.system
     val context = center.context.getContext[SourceContext](key)
-    implicit val config = context.config
-    val sourceProps = sourceApplies(lnsCategory)(key, center)
-    val props = lnsShadow match {
-      case true ⇒
-        Props(classOf[ShadowPublisher], key, system.actorOf(sourceProps), center)
-      case false ⇒ sourceProps
+    val config = context.config
+    val sourceProps = sourceApplies(config.category)(key, center)
+    val props = if (config.shadow) {
+      Props(classOf[ShadowPublisher], key, system.actorOf(sourceProps), center)
+    } else {
+      sourceProps
     }
-    Source.actorPublisher[T](props).mapMaterializedValue {
-      ref ⇒
-        center.context.indexes.modifyByKey2(key, _.asInstanceOf[SourceContext].copy(actorRef = ref)); ref
+    Source.actorPublisher[T](props).mapMaterializedValue { ref ⇒
+      center.context.indexes.modifyByKey2(key, _.asInstanceOf[SourceContext].copy(actorRef = ref)); ref
     }
   }
 

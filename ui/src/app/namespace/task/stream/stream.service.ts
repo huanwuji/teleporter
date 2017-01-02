@@ -7,8 +7,7 @@ import {
   TextboxFormItem,
   TextareaFormItem,
   DynamicGroupFormItem,
-  DropdownFormItem,
-  ArrayFormItem
+  DropdownFormItem
 } from "../../../dynamic/form/form-item";
 
 export interface Stream extends Identity {
@@ -60,7 +59,7 @@ export class StreamService extends ConfigService<Stream> {
         ],
         value: 'NORMAL'
       }),
-      new ArrayFormItem({
+      new DynamicGroupFormItem({
         key: 'extraKeys',
         label: 'extraKeys'
       }),

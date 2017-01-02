@@ -1,6 +1,5 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
-import {Location} from "@angular/common";
+import {ActivatedRoute, Router} from "@angular/router";
 import {PartitionService, Partition, RuntimePartitionService} from "./partition.service";
 import {KeyBean} from "../../../rest.servcie";
 import {FormItemBase} from "../../../dynamic/form/form-item";
@@ -30,8 +29,8 @@ export class PartitionListComponent implements OnInit {
   }
 
   list() {
-    this.partitionService.range(`/partition/${this.ns}/${this.task}`, 0, 2000)
-      .then(kbs =>this.kbs = kbs);
+    this.partitionService.range(`/partition/${this.ns}/${this.task}`)
+      .then(kbs => this.kbs = kbs);
   }
 
   runtime(i: number, key: string) {
@@ -63,7 +62,7 @@ export class PartitionDetailComponent implements OnInit {
   private task: string;
   private key: string;
 
-  constructor(private route: ActivatedRoute, private location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               private partitionService: PartitionService, private formItemService: FormItemService) {
   }
 
@@ -97,7 +96,7 @@ export class PartitionDetailComponent implements OnInit {
   onSubmit() {
     let partition = this.formGroup.value;
     this.partitionService.save(this.fullKey(partition.key), partition)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${partition.key}`], {relativeTo: this.route}));
   }
 
   protected fullKey(key: string) {

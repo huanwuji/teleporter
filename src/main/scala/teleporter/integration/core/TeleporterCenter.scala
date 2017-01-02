@@ -1,11 +1,15 @@
 package teleporter.integration.core
 
+import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
+
 import akka.Done
 import akka.actor.{ActorRef, ActorSystem, Props}
+import akka.dispatch.ExecutionContexts
 import akka.pattern._
 import akka.stream.scaladsl.{Sink, Source}
 import akka.stream.{ActorMaterializer, Materializer}
 import akka.util.Timeout
+import com.google.common.util.concurrent.ThreadFactoryBuilder
 import com.markatta.akron.CronTab
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
@@ -13,15 +17,17 @@ import teleporter.integration.ActorTestMessages.Ping
 import teleporter.integration.cluster.instance.Brokers
 import teleporter.integration.cluster.rpc.proto.Rpc.TeleporterEvent
 import teleporter.integration.component.GitClient
-import teleporter.integration.core.TeleporterConfig._
+import teleporter.integration.component.kv.KVOperator
+import teleporter.integration.component.kv.leveldb.{LevelDBs, LevelTable}
+import teleporter.integration.component.kv.rocksdb.{RocksDBs, RocksTable}
+import teleporter.integration.concurrent.SizeScaleThreadPoolExecutor
 import teleporter.integration.core.TeleporterConfigActor.LoadAddress
 import teleporter.integration.metrics.{InfluxdbReporter, MetricRegistry}
-import teleporter.integration.transaction.ChunkTransaction.ChunkTxnConfig
-import teleporter.integration.transaction.RecoveryPoint
+import teleporter.integration.transaction.{RecoveryPoint, RingTxnConfig}
 import teleporter.integration.utils.EventListener
 
-import scala.concurrent.Future
 import scala.concurrent.duration.{Duration, FiniteDuration, _}
+import scala.concurrent.{ExecutionContext, Future}
 
 
 /**
@@ -30,11 +36,14 @@ import scala.concurrent.duration.{Duration, FiniteDuration, _}
   * @author daikui
   */
 trait TeleporterCenter extends LazyLogging {
-  implicit final val self = this
+  implicit final val self: TeleporterCenter = this
 
   implicit val system: ActorSystem
 
   implicit val materializer: Materializer
+  implicit val defaultExecutionContext: ExecutionContext = system.dispatcher
+  val blockExecutionContext: ExecutionContext = ExecutionContexts.fromExecutor(new SizeScaleThreadPoolExecutor(5, 500, 20, 60L, TimeUnit.SECONDS,
+    new LinkedBlockingQueue[Runnable], new ThreadFactoryBuilder().setNameFormat("teleporter-bio-thread-%d").build()))
 
   val instanceKey: String
 
@@ -48,9 +57,11 @@ trait TeleporterCenter extends LazyLogging {
 
   def configRef: ActorRef
 
-  def defaultRecoveryPoint: RecoveryPoint[SourceConfig]
+  def defaultRecoveryPoint: RecoveryPoint[SourceMetaBean]
 
   def eventListener: EventListener[TeleporterEvent]
+
+  def client: TeleporterConfigClient
 
   def metricsRegistry: MetricRegistry
 
@@ -58,7 +69,7 @@ trait TeleporterCenter extends LazyLogging {
 
   def crontab: ActorRef
 
-  def recoveryPoint(transactionConf: ChunkTxnConfig): RecoveryPoint[SourceConfig] = if (transactionConf.recoveryPointEnabled) defaultRecoveryPoint else RecoveryPoint.empty
+  def recoveryPoint(transactionConf: RingTxnConfig): RecoveryPoint[SourceMetaBean] = if (transactionConf.recoveryPointEnabled) defaultRecoveryPoint else RecoveryPoint.empty
 
   def openMetrics(key: String, period: FiniteDuration): Unit = system.actorOf(Props(classOf[InfluxdbReporter], key, period, this))
 
@@ -70,10 +81,12 @@ trait TeleporterCenter extends LazyLogging {
 
   def sink[T](key: String): Sink[T, ActorRef] = components.sink[T](key)
 
+  def localStatusRef: ActorRef
+
   def start(): Future[Done]
 }
 
-class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config: Config)
+class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config: Config, kVOperator: KVOperator)
                           (implicit val system: ActorSystem, val materializer: Materializer) extends TeleporterCenter {
   implicit val timeout: Timeout = 1.minute
   var _context: TeleporterContext = _
@@ -81,18 +94,20 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
   var _streams: ActorRef = _
   var _components: Components = _
   var _configRef: ActorRef = _
-  var _defaultRecoveryPoint: RecoveryPoint[SourceConfig] = _
+  var _defaultRecoveryPoint: RecoveryPoint[SourceMetaBean] = _
   var _metricRegistry: MetricRegistry = _
-  val _eventListener = EventListener[TeleporterEvent]()
+  val _eventListener: EventListener[TeleporterEvent] = EventListener[TeleporterEvent]()
+  val _teleporterConfigClient = TeleporterConfigClient()
+  var _localStatusRef: ActorRef = _
 
   override def start(): Future[Done] = {
-    import system.dispatcher
     _context = TeleporterContext()
     _streams = Streams()
     _components = Components()
     _configRef = TeleporterConfigActor(_eventListener)
     _defaultRecoveryPoint = RecoveryPoint()
     _metricRegistry = MetricRegistry()
+    _localStatusRef = system.actorOf(Props(classOf[LocalStatusActor], config.getString("status-path")))
     val (brokerRef, connected) = Brokers(seedBrokers)
     _brokers = brokerRef
     connected.map {
@@ -113,6 +128,8 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
     }
   }
 
+  override def localStatusRef: ActorRef = _localStatusRef
+
   override def context: TeleporterContext = _context
 
   override def brokers: ActorRef = _brokers
@@ -123,9 +140,11 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
 
   override def configRef: ActorRef = _configRef
 
-  override def defaultRecoveryPoint: RecoveryPoint[SourceConfig] = _defaultRecoveryPoint
+  override def defaultRecoveryPoint: RecoveryPoint[SourceMetaBean] = _defaultRecoveryPoint
 
   override def eventListener: EventListener[TeleporterEvent] = _eventListener
+
+  override def client: TeleporterConfigClient = _teleporterConfigClient
 
   override def metricsRegistry: MetricRegistry = _metricRegistry
 
@@ -141,6 +160,11 @@ object TeleporterCenter extends LazyLogging {
 
     val instanceConfig = config.getConfig("teleporter")
     val (instanceKey, seedBrokers) = (instanceConfig.getString("key"), instanceConfig.getString("brokers"))
-    new TeleporterCenterImpl(instanceKey, seedBrokers, config)
+    val localStorageConfig = instanceConfig.getConfig("localStorage")
+    val localStorage = localStorageConfig.getString("type") match {
+      case "leveldb" ⇒ LevelTable(LevelDBs("teleporter", localStorageConfig.getString("path")), "localStorage")
+      case "rocksdb" ⇒ RocksTable(RocksDBs("teleporter", localStorageConfig.getString("path")), "localStorage")
+    }
+    new TeleporterCenterImpl(instanceKey, seedBrokers, config, localStorage)
   }
 }

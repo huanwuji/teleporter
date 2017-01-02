@@ -1,20 +1,22 @@
 package teleporter.integration.cluster.instance
 
-import java.nio.file.Paths
+import java.nio.file.{Path, Paths}
 
 import akka.actor.{Actor, Cancellable}
 import akka.stream.scaladsl.{Framing, Sink, SinkQueueWithCancel, Source}
 import akka.util.ByteString
-import com.google.common.io.Resources
 import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.LogManager
+import org.apache.logging.log4j.core.LoggerContext
+import org.apache.logging.log4j.core.appender.RollingFileAppender
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.instance.LogTrace.{Check, Line, LogTailer}
 import teleporter.integration.cluster.rpc.proto.Rpc.{EventType, TeleporterEvent}
-import teleporter.integration.cluster.rpc.proto.broker.Broker.LogRequest
 import teleporter.integration.cluster.rpc.proto.instance.Instance.LogResponse
 import teleporter.integration.component.file.FileTailerPublisher
 import teleporter.integration.core.TeleporterCenter
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.duration._
 
@@ -29,20 +31,16 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with LazyLoggi
   var logTailer: LogTailer = _
   var checkSchedule: Cancellable = _
   var currTime: Long = System.currentTimeMillis()
-  val eventQueue = mutable.Queue[TeleporterEvent]()
-  val logs = mutable.Queue[Line]()
+  val eventQueue: mutable.Queue[TeleporterEvent] = mutable.Queue[TeleporterEvent]()
+  val logs: mutable.Queue[Line] = mutable.Queue[Line]()
 
   override def receive: Receive = {
     case event: TeleporterEvent ⇒
       currTime = System.currentTimeMillis()
       event.getType match {
         case EventType.LogRequest ⇒
-          val logRequest = LogRequest.parseFrom(event.getBody)
           if (logTailer == null) {
-            createLogTailer(logRequest.getCmd)
-          } else if (logTailer.path != logRequest.getCmd) {
-            destroy()
-            createLogTailer(logRequest.getCmd)
+            createLog4j2Tailer()
           }
           eventQueue += event
       }
@@ -72,9 +70,12 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with LazyLoggi
     }
   }
 
-  def createLogTailer(path: String): Unit = {
-    val _path = Paths.get(Resources.getResource(getClass, "/").toURI).getParent.getParent.getParent.getParent.resolve("logs/server.log")
-    val queue = Source.actorPublisher[ByteString](FileTailerPublisher.props(_path))
+  def createLog4j2Tailer(): Unit = {
+    val loggerContext = LogManager.getContext(true).asInstanceOf[LoggerContext]
+    val path = loggerContext.getConfiguration.getAppenders.asScala.collect {
+      case (_, v: RollingFileAppender) ⇒ Paths.get(v.getFileName)
+    }.head
+    val queue = Source.actorPublisher[ByteString](FileTailerPublisher.props(path))
       .via(Framing.delimiter(ByteString.fromString("\n"), 1024 * 5))
       .runWith(Sink.queue())
     this.logTailer = LogTailer(path, queue)
@@ -102,6 +103,6 @@ object LogTrace {
 
   case class Line(s: String)
 
-  case class LogTailer(path: String, queue: SinkQueueWithCancel[ByteString])
+  case class LogTailer(path: Path, queue: SinkQueueWithCancel[ByteString])
 
 }

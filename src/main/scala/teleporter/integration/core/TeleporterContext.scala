@@ -9,7 +9,6 @@ import teleporter.integration.cluster.broker.PersistentProtocol.{Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.rpc.proto.Rpc.{EventType, TeleporterEvent}
 import teleporter.integration.cluster.rpc.proto.broker.Broker.{LinkAddress, LinkVariable}
-import teleporter.integration.core.TeleporterConfig._
 import teleporter.integration.core.TeleporterContext.{SyncBroker, _}
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{MultiIndexMap, TwoIndexMap}
@@ -26,16 +25,24 @@ import scala.collection.mutable
 trait ComponentContext {
   val id: Long
   val key: String
-  val config: TeleporterConfig
+  val config: ConfigMetaBean
 }
 
-case class PartitionContext(id: Long, key: String, config: PartitionConfig) extends ComponentContext {
-  def streams()(implicit center: TeleporterCenter): Map[String, StreamContext] = {
-    config.__dicts__[String]("keys").flatMap(center.context.indexes.regexRangeTo[StreamContext]).toMap
+trait ExtraKeys {
+  self: ComponentContext ⇒
+  def extraKeys[T <: ComponentContext](innerKey: String)(implicit center: TeleporterCenter): T = {
+    val key = self.config.extraKeys[String](innerKey)
+    center.context.getContext[T](key)
   }
 }
 
-case class TaskContext(id: Long, key: String, config: TaskConfig, streamSchedule: ActorRef = ActorRef.noSender) extends ComponentContext {
+case class PartitionContext(id: Long, key: String, config: PartitionMetaBean) extends ExtraKeys with ComponentContext {
+  def streams()(implicit center: TeleporterCenter): Map[String, StreamContext] = {
+    config.keys.flatMap(center.context.indexes.regexRangeTo[StreamContext]).toMap
+  }
+}
+
+case class TaskContext(id: Long, key: String, config: TaskMetaBean, streamSchedule: ActorRef = ActorRef.noSender) extends ExtraKeys with ComponentContext {
   def streams()(implicit center: TeleporterCenter): mutable.Map[String, StreamContext] = {
     center.context.indexes.rangeTo[StreamContext](Keys(STREAMS, Keys.unapply(key, TASK)))
   }
@@ -49,7 +56,7 @@ case class TaskContext(id: Long, key: String, config: TaskConfig, streamSchedule
   }
 }
 
-case class StreamContext(id: Long, key: String, config: StreamConfig) extends ComponentContext {
+case class StreamContext(id: Long, key: String, config: StreamMetaBean) extends ExtraKeys with ComponentContext {
   def task()(implicit center: TeleporterCenter): TaskContext = {
     center.context.getContext[TaskContext](Keys(TASK, Keys.unapply(key, STREAM)))
   }
@@ -63,7 +70,7 @@ case class StreamContext(id: Long, key: String, config: StreamConfig) extends Co
   }
 }
 
-case class SourceContext(id: Long, key: String, config: SourceConfig, actorRef: ActorRef = ActorRef.noSender) extends ComponentContext {
+case class SourceContext(id: Long, key: String, config: SourceMetaBean, actorRef: ActorRef = ActorRef.noSender) extends ExtraKeys with ComponentContext {
   def task()(implicit center: TeleporterCenter): TaskContext = {
     center.context.getContext[TaskContext](Keys(TASK, Keys.unapply(key, SOURCE)))
   }
@@ -72,14 +79,12 @@ case class SourceContext(id: Long, key: String, config: SourceConfig, actorRef: 
     center.context.getContext[StreamContext](Keys(STREAM, Keys.unapply(key, SOURCE)))
   }
 
-  def addressKey = config[String]("address")
-
   def address()(implicit center: TeleporterCenter): AddressContext = {
-    center.context.getContext[AddressContext](config[String]("address"))
+    center.context.getContext[AddressContext](config.address)
   }
 }
 
-case class SinkContext(id: Long, key: String, config: SinkConfig, actorRef: ActorRef = ActorRef.noSender) extends ComponentContext {
+case class SinkContext(id: Long, key: String, config: SinkMetaBean, actorRef: ActorRef = ActorRef.noSender) extends ExtraKeys with ComponentContext {
   def task()(implicit center: TeleporterCenter): TaskContext = {
     center.context.getContext[TaskContext](Keys(TASK, Keys.unapply(key, SOURCE)))
   }
@@ -88,18 +93,17 @@ case class SinkContext(id: Long, key: String, config: SinkConfig, actorRef: Acto
     center.context.getContext[StreamContext](Keys(STREAM, Keys.unapply(key, SINK)))
   }
 
-  def addressKey = config[String]("address")
-
   def address()(implicit center: TeleporterCenter): AddressContext = {
-    center.context.getContext[AddressContext](config[String]("address"))
+    center.context.getContext[AddressContext](config.address)
   }
 }
 
 object ClientRefs {
   def apply[A](share: Boolean): ClientRefs[A] =
-    share match {
-      case true ⇒ new ShareClientRefs[A]
-      case false ⇒ new MultiClientRefs[A]
+    if (share) {
+      new ShareClientRefs[A]
+    } else {
+      new MultiClientRefs[A]
     }
 }
 
@@ -140,7 +144,7 @@ class ShareClientRefs[A] extends ClientRefs[A] with LazyLogging {
 }
 
 class MultiClientRefs[A] extends ClientRefs[A] with LazyLogging {
-  val clientRefs = TrieMap[String, ClientRef[A]]()
+  val clientRefs: TrieMap[String, ClientRef[A]] = TrieMap[String, ClientRef[A]]()
 
   override def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A = {
     logger.info(s"create multi address $key")
@@ -157,9 +161,9 @@ class MultiClientRefs[A] extends ClientRefs[A] with LazyLogging {
   }
 }
 
-case class AddressContext(id: Long, key: String, config: AddressConfig, linkKeys: Set[String], clientRefs: ClientRefs[Any]) extends ComponentContext
+case class AddressContext(id: Long, key: String, config: AddressMetaBean, linkKeys: Set[String], clientRefs: ClientRefs[Any]) extends ExtraKeys with ComponentContext
 
-case class VariableContext(id: Long, key: String, config: VariableConfig, linkKeys: Set[String]) extends ComponentContext
+case class VariableContext(id: Long, key: String, config: VariableMetaBean, linkKeys: Set[String]) extends ComponentContext
 
 trait TeleporterContext {
   val indexes: TwoIndexMap[Long, ComponentContext]
@@ -183,7 +187,7 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
   private def updateContext(): Receive = {
     case Upsert(ctx: ComponentContext, trigger) ⇒
       ctx match {
-        case streamContext: StreamContext if StreamMetadata.lnsStatus(streamContext.config) != StreamStatus.NORMAL ⇒
+        case streamContext: StreamContext if streamContext.config.status != StreamStatus.NORMAL ⇒
           self ! Remove(ctx, trigger)
         case _ ⇒
           if (indexes.getKey1(ctx.id).isDefined) {
@@ -194,49 +198,52 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
       }
     case Add(ctx: ComponentContext, trigger) ⇒
       indexes += (ctx.id, ctx.key, ctx)
-      ctx.config.__dicts__[String]("extraKeys").foreach(addLinkKeys)
       ctx match {
-        case ctx: PartitionContext ⇒
-        case ctx: TaskContext ⇒
-        case ctx: StreamContext ⇒
-        case ctx: SourceContext ⇒
-          addLinkKeys(ctx.addressKey)
-        case ctx: SinkContext ⇒
-          addLinkKeys(ctx.addressKey)
-        case ctx: AddressContext ⇒
-        case ctx: VariableContext ⇒
+        case _: PartitionContext ⇒
+        case taskContext: TaskContext ⇒
+          taskContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+        case streamContext: StreamContext ⇒
+          streamContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+        case sourceContext: SourceContext ⇒
+          sourceContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+          sourceContext.config.addressOption.foreach(addLinkKeys)
+        case sinkContext: SinkContext ⇒
+          sinkContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+          sinkContext.config.addressOption.foreach(addLinkKeys)
+        case _: AddressContext ⇒
+        case _: VariableContext ⇒
       }
       if (trigger) self ! TriggerAdd(ctx)
     case Update(ctx: ComponentContext, trigger) ⇒
       val oldContext = center.context.getContext[ComponentContext](ctx.id)
-      val oldExtraKeys = oldContext.config.__dicts__[String]("extraKeys").toSet
-      val extraKeys = ctx.config.__dicts__[String]("extraKeys").toSet
+      val oldExtraKeys = oldContext.config.extraKeys.toMap.values.collect { case x: String ⇒ x }.toSet
+      val extraKeys = ctx.config.extraKeys.toMap.values.collect { case x: String ⇒ x }.toSet
       (oldExtraKeys -- extraKeys).foreach(removeLinkKeys)
       (extraKeys -- oldExtraKeys).foreach(addLinkKeys)
       ctx match {
-        case ctx: PartitionContext ⇒
-        case ctx: TaskContext ⇒
-        case ctx: StreamContext ⇒
+        case _: PartitionContext ⇒
+        case _: TaskContext ⇒
+        case _: StreamContext ⇒
         case ctx: SourceContext ⇒
           val oldSourceContext = center.context.getContext[SourceContext](ctx.id)
-          if (oldSourceContext.addressKey != ctx.addressKey) {
-            removeLinkKeys(oldSourceContext.addressKey)
-            addLinkKeys(ctx.addressKey)
+          if (oldSourceContext.config.address != ctx.config.address) {
+            removeLinkKeys(oldSourceContext.config.address)
+            addLinkKeys(ctx.config.address)
           }
         case ctx: SinkContext ⇒
           val oldSinkContext = center.context.getContext[SinkContext](ctx.id)
-          if (oldSinkContext.addressKey != ctx.addressKey) {
-            removeLinkKeys(oldSinkContext.addressKey)
+          if (oldSinkContext.config.address != ctx.config.address) {
+            removeLinkKeys(oldSinkContext.config.address)
             addLinkKeys(ctx.key)
           }
-        case ctx: AddressContext ⇒
-        case ctx: VariableContext ⇒
+        case _: AddressContext ⇒
+        case _: VariableContext ⇒
       }
       indexes += (ctx.id, ctx.key, ctx)
       if (trigger) self ! TriggerUpdate(ctx)
     case Remove(ctx: ComponentContext, trigger) ⇒
       indexes.removeKey1(ctx.id)
-      ctx.config.__dicts__[String]("extraKeys").foreach(removeLinkKeys)
+      ctx.config.extraKeys.toMap.values.foreach { case (_, v: String) ⇒ removeLinkKeys(v) }
       ctx match {
         case ctx: PartitionContext ⇒ ctx.streams().foreach(self ! Remove(_))
         case ctx: TaskContext ⇒ ctx.streams().foreach(self ! Remove(_))
@@ -244,11 +251,11 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
           ctx.sources().foreach(self ! Remove(_))
           ctx.sinks().foreach(self ! Remove(_))
         case ctx: SourceContext ⇒
-          removeLinkKeys(ctx.addressKey)
+          removeLinkKeys(ctx.config.address)
         case ctx: SinkContext ⇒
-          removeLinkKeys(ctx.addressKey)
-        case ctx: AddressContext ⇒
-        case ctx: VariableContext ⇒
+          removeLinkKeys(ctx.config.address)
+        case _: AddressContext ⇒
+        case _: VariableContext ⇒
       }
       if (trigger) self ! TriggerRemove(ctx)
     case SyncBroker(ctx) ⇒

@@ -1,6 +1,7 @@
-package teleporter.integration.component.rocksdb
+package teleporter.integration.component.kv.rocksdb
 
 import org.rocksdb.{Options, RocksDB}
+import teleporter.integration.component.kv.KVOperator
 import teleporter.integration.utils.Bytes
 
 import scala.collection.concurrent.TrieMap
@@ -10,9 +11,10 @@ import scala.collection.concurrent.TrieMap
   */
 object RocksDBs {
   RocksDB.loadLibrary()
-  val dbs = TrieMap[String, RocksDB]()
+  val defaultPath = "../../rocksdb"
+  val dbs: TrieMap[String, RocksDB] = TrieMap[String, RocksDB]()
 
-  def apply(dbName: String, path: String = "../../rocksdb"): RocksDB = {
+  def apply(dbName: String, path: String): RocksDB = {
     dbs.getOrElseUpdate(dbName, {
       val options = new Options().setCreateIfMissing(true)
       RocksDB.open(options, s"$path/$dbName")
@@ -24,7 +26,7 @@ object RocksDBs {
   }
 
   def applyTable(dbName: String, tableName: String): RocksTable = {
-    val db = this.apply(dbName)
+    val db = this.apply(dbName, defaultPath)
     RocksTable(db, tableName)
   }
 
@@ -33,14 +35,14 @@ object RocksDBs {
   def close(): Unit = dbs.keys.foreach(close)
 }
 
-class RocksTable(db: RocksDB, tableName: Array[Byte]) {
-  def apply(key: Array[Byte]): Array[Byte] = db.get(fullKey(key))
+class RocksTable(db: RocksDB, tableName: Array[Byte]) extends KVOperator {
+  override def apply(key: Array[Byte]): Array[Byte] = db.get(fullKey(key))
 
-  def get(key: Array[Byte]): Option[Array[Byte]] = Option(db.get(fullKey(key)))
+  override def get(key: Array[Byte]): Option[Array[Byte]] = Option(db.get(fullKey(key)))
 
-  def put(key: Array[Byte], value: Array[Byte]): Unit = db.put(fullKey(key), value)
+  override def put(key: Array[Byte], value: Array[Byte]): Unit = db.put(fullKey(key), value)
 
-  def atomicPut(key: Array[Byte], expectValue: Array[Byte], updateValue: Array[Byte]): Boolean = {
+  override def atomicPut(key: Array[Byte], expectValue: Array[Byte], updateValue: Array[Byte]): Boolean = {
     synchronized {
       val _key = fullKey(key)
       get(_key) match {
@@ -56,9 +58,9 @@ class RocksTable(db: RocksDB, tableName: Array[Byte]) {
     }
   }
 
-  def remove(key: Array[Byte]): Unit = db.remove(fullKey(key))
+  override def remove(key: Array[Byte]): Unit = db.remove(fullKey(key))
 
-  def range(key: Array[Byte]): Iterator[(Array[Byte], Array[Byte])] = {
+  override def range(key: Array[Byte]): Iterator[(Array[Byte], Array[Byte])] = {
     val iterator = db.newIterator()
     val _key = fullKey(key)
     iterator.seek(_key)

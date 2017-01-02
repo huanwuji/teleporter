@@ -34,6 +34,7 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
         case Tables.sink ⇒ notifySink(key, key, ConfigChangeNotify.Action.UPDATE)
         case Tables.address ⇒ notifyAddress(key, key, ConfigChangeNotify.Action.UPDATE)
         case Tables.variable ⇒ notifyVariable(key, key, ConfigChangeNotify.Action.UPDATE)
+        case Tables.broker ⇒
       }
     case Remove(key) ⇒
       Keys.table(key) match {
@@ -45,6 +46,7 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
         case Tables.sink ⇒ notifySink(key, key, ConfigChangeNotify.Action.REMOVE)
         case Tables.address ⇒ notifyAddress(key, key, ConfigChangeNotify.Action.REMOVE)
         case Tables.variable ⇒ notifyVariable(key, key, ConfigChangeNotify.Action.REMOVE)
+        case Tables.broker ⇒
       }
   }
 
@@ -98,7 +100,7 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
   }
 
   def notifyVariable(key: String, notifyKey: String, action: ConfigChangeNotify.Action): Unit = {
-    runtimeService.range(Keys.mapping(key, VARIABLE, RUNTIME_VARIABLE)).foreach { runtimeVariable ⇒
+    runtimeService.range(Keys.mapping(key, VARIABLE, RUNTIME_VARIABLES)).foreach { runtimeVariable ⇒
       connectionKeepers.get(Keys.mapping(runtimeVariable.key, RUNTIME_VARIABLE, INSTANCE))
         .foreach(_.senderRef ! notifyEvent(notifyKey, action))
     }

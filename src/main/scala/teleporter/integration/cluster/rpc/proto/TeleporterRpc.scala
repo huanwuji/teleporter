@@ -12,7 +12,7 @@ object TeleporterRpc {
     TeleporterEvent.newBuilder(event).setStatus(EventStatus.Success).build()
   }
 
-  def error(event: TeleporterEvent): TeleporterEvent = {
+  def failure(event: TeleporterEvent): TeleporterEvent = {
     TeleporterEvent.newBuilder(event).setStatus(EventStatus.Failure).build()
   }
 }

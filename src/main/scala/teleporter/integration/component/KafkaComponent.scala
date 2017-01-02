@@ -8,31 +8,31 @@ import akka.stream.actor.ActorSubscriberMessage.OnNext
 import akka.stream.actor._
 import com.google.protobuf.{ByteString ⇒ GByteString}
 import com.typesafe.scalalogging.LazyLogging
-import kafka.consumer.{ConsumerConfig, KafkaStream}
+import kafka.consumer.{ConsumerConfig, ConsumerIterator, KafkaStream}
 import kafka.javaapi.consumer.ZkKafkaConsumerConnector
 import org.apache.kafka.clients.producer._
 import teleporter.integration._
 import teleporter.integration.component.KafkaComponent.{KafkaLocation, TopicPartition}
 import teleporter.integration.component.KafkaExchanger.InnerAddress
 import teleporter.integration.component.ShadowPublisher.Register
-import teleporter.integration.component.SubscriberMessage.Success
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics.{Measurement, Tag, Tags}
 import teleporter.integration.metrics.MetricsCounter
 import teleporter.integration.protocol.proto.KafkaBuf.{KafkaProto, KafkaProtos}
 import teleporter.integration.transaction._
-import teleporter.integration.utils.Converters._
 
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
+import scala.collection.immutable.IndexedSeq
 import scala.collection.mutable
+import scala.concurrent.duration._
 
 /**
   * date 2015/8/3.
   *
   * @author daikui
   */
-object KafkaComponent extends AddressMetadata {
+object KafkaComponent {
 
   case class TopicPartition(topic: String, partition: Int)
 
@@ -41,7 +41,7 @@ object KafkaComponent extends AddressMetadata {
   def kafkaProducerApply: ClientApply = (key, center) ⇒ {
     implicit val config = center.context.getContext[AddressContext](key).config
     val props = new Properties()
-    lnsClient.toMap.foreach {
+    config.client.toMap.foreach {
       case (k, v) ⇒
         if (v != null && v.toString.nonEmpty) {
           props.put(k, v.toString)
@@ -53,7 +53,7 @@ object KafkaComponent extends AddressMetadata {
   def kafkaConsumerApply: ClientApply = (key, center) ⇒ {
     implicit val config = center.context.getContext[AddressContext](key).config
     val props = new Properties()
-    lnsClient.toMap.foreach {
+    config.client.toMap.foreach {
       case (k, v) ⇒
         if (v != null && v.toString.nonEmpty) {
           props.put(k, v.toString)
@@ -64,24 +64,31 @@ object KafkaComponent extends AddressMetadata {
   }
 }
 
-trait KafkaPublisherMetadata extends SourceMetadata {
-  val FTopic = "topics"
+object KafkaPublisherMetaBean {
+  val FTopics = "topics"
+}
+
+class KafkaPublisherMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
+
+  import KafkaPublisherMetaBean._
+
+  def topics: String = client[String](FTopics)
 }
 
 trait PublisherRouter {
   self: Component ⇒
   var routingSeqNr = 0L
-  val tIdMapping = mutable.Map[TId, InnerAddress]()
+  val tIdMapping: mutable.LongMap[InnerAddress] = mutable.LongMap[InnerAddress]()
 
   def routingOut[A](message: TeleporterMessage[A], innerRef: ActorRef)(implicit outerRef: ActorRef): (ActorRef, TeleporterMessage[A]) = {
     val innerAddress = InnerAddress(message.id, innerRef)
     val outerTId = TId(id(), routingSeqNr, 1)
     routingSeqNr += 1
-    tIdMapping += (outerTId → innerAddress)
+    tIdMapping += (routeId(outerTId) → innerAddress)
     (innerRef, message.copy[A](id = outerTId, sourceRef = outerRef))
   }
 
-  def routingIn(outerTId: TId): Unit = tIdMapping.remove(outerTId).foreach { innerAddress ⇒
+  def routingIn(outerTId: TId): Unit = tIdMapping.remove(routeId(outerTId)).foreach { innerAddress ⇒
     if (outerTId.channelId != 1) {
       innerAddress.innerRef ! innerAddress.tId.copy(channelId = outerTId.channelId)
     } else {
@@ -89,7 +96,9 @@ trait PublisherRouter {
     }
   }
 
-  def routerClear() = tIdMapping.clear()
+  def routerClear(): Unit = tIdMapping.clear()
+
+  private def routeId(tId: TId): Long = tId.persistenceId << 32 | tId.seqNr.toInt
 }
 
 object KafkaExchanger {
@@ -98,21 +107,18 @@ object KafkaExchanger {
 
 }
 
-/**
-  * source://addressId?topic=trade
-  */
 class KafkaPublisher(override val key: String)(implicit val center: TeleporterCenter)
   extends ActorPublisher[TeleporterKafkaMessage]
     with PublisherRouter
-    with KafkaPublisherMetadata
     with Component
     with LazyLogging {
-  implicit val sourceContext = center.context.getContext[SourceContext](key)
-  val counter = center.metricsRegistry.counter(Measurement(key, Seq(Tags.success)))
-  val zkConnector = center.components.address[ZkKafkaConsumerConnector](sourceContext.addressKey)
-  val kafkaStreamWorkers = {
+  val sourceContext: SourceContext = center.context.getContext[SourceContext](key)
+  val counter: MetricsCounter = center.metricsRegistry.counter(Measurement(key, Seq(Tags.success)))
+  val zkConnector: ZkKafkaConsumerConnector = center.components.address[ZkKafkaConsumerConnector](sourceContext.config.address)
+  val kafkaStreamWorkers: IndexedSeq[ActorRef] = {
     var totalThreads = 0
-    val topicMaps: Map[String, Integer] = sourceContext.config[String](FClient, FTopic).split(",").map {
+    val kafkaPublisherMetaBean = sourceContext.config.mapTo[KafkaPublisherMetaBean]
+    val topicMaps: Map[String, Integer] = kafkaPublisherMetaBean.topics.split(",").map {
       topicInfo ⇒
         topicInfo.split(":") match {
           case Array(name, threads) ⇒
@@ -126,15 +132,15 @@ class KafkaPublisher(override val key: String)(implicit val center: TeleporterCe
       logger.warn("Kafka worker is use independent thread pool, Only 32 of threads, If totalThreads more than this, must modify kafka-workers-dispatcher config")
     }
     zkConnector.createMessageStreams(topicMaps.asJava).asScala.flatMap {
-      case entry@(topic, streams) ⇒
+      case (_, streams) ⇒
         streams.asScala.map(stream ⇒ context.actorOf(Props(classOf[KafkaStreamWorker], key, zkConnector, stream, center)
           .withDispatcher("akka.teleporter.kafka-workers-dispatcher")))
     }.toIndexedSeq
   }
-  var shadowRef = Actor.noSender
+  var shadowRef: ActorRef = Actor.noSender
   var selfDemand = 0L
   val workersDemand = mutable.Map(kafkaStreamWorkers.map(ref ⇒ (ref, 0L)): _*)
-  val buffer = mutable.Queue[(ActorRef, TeleporterKafkaMessage)]()
+  val buffer: mutable.Queue[(ActorRef, TeleporterKafkaMessage)] = mutable.Queue[(ActorRef, TeleporterKafkaMessage)]()
 
   @throws[Exception](classOf[Exception])
   override def preStart(): Unit = {
@@ -168,10 +174,10 @@ class KafkaPublisher(override val key: String)(implicit val center: TeleporterCe
     case x ⇒ logger.warn(s"kafka consumer can't arrived, $x")
   }
 
-  def worksRequest(request: Long) = {
+  def worksRequest(request: Long): Unit = {
     selfDemand += request
     workersDemand.foreach {
-      case entry@(workerRef, demand) ⇒
+      case (workerRef, demand) ⇒
         if (demand < selfDemand) {
           workerRef ! Request(selfDemand)
           workersDemand.update(workerRef, demand + selfDemand)
@@ -190,7 +196,7 @@ class KafkaPublisher(override val key: String)(implicit val center: TeleporterCe
       delivery(n - 1, handler)
     }
 
-  def reset() = {
+  def reset(): Unit = {
     routerClear()
     routingSeqNr = 0
     selfDemand = 0
@@ -206,10 +212,11 @@ class KafkaPublisher(override val key: String)(implicit val center: TeleporterCe
 class KafkaStreamWorker(val key: String,
                         zkConnector: ZkKafkaConsumerConnector,
                         kafkaStream: KafkaStream[Array[Byte], Array[Byte]])(implicit center: TeleporterCenter) extends Actor with LazyLogging {
-  val streamIt = kafkaStream.iterator()
-  val transaction = Transaction[KafkaMessage, Seq[KafkaLocation]](key, new KafkaRecoveryPoint(zkConnector))
-  val metrics = mutable.HashMap[TopicPartition, MetricsCounter]()
+  val streamIt: ConsumerIterator[Array[Byte], Array[Byte]] = kafkaStream.iterator()
+  val transaction: Transaction[KafkaMessage, Seq[KafkaLocation]] = Transaction[KafkaMessage, Seq[KafkaLocation]](key, new KafkaRecoveryPoint(zkConnector))
+  val metrics: mutable.HashMap[TopicPartition, MetricsCounter] = mutable.HashMap[TopicPartition, MetricsCounter]()
 
+  import context.dispatcher
   import transaction._
 
   override def receive: Actor.Receive = {
@@ -218,7 +225,7 @@ class KafkaStreamWorker(val key: String,
     case x ⇒ logger.warn(s"$x not arrived")
   }
 
-  val locations = mutable.Map[TopicPartition, KafkaLocation]()
+  val locations: mutable.Map[TopicPartition, KafkaLocation] = mutable.Map[TopicPartition, KafkaLocation]()
 
   @tailrec
   final def delivery(n: Long): Unit = {
@@ -234,29 +241,31 @@ class KafkaStreamWorker(val key: String,
             locations.put(topicPartition, KafkaLocation(topicPartition, message.offset))
         }
         kafkaMessageOption
-      }, sender() ! _)
-      delivery(n - 1)
+      }, sender() ! _) match {
+        case Transaction.Normal | Transaction.Retry ⇒
+          delivery(n - 1)
+        case Transaction.NoData ⇒ throw new IllegalStateException("No data can't happened")
+        case Transaction.OverLimit ⇒
+          context.system.scheduler.scheduleOnce(1.seconds, self, Request(n))
+      }
     }
   }
 }
 
 class KafkaSubscriberWork(val client: Producer[Array[Byte], Array[Byte]]) extends SubscriberWorker[Producer[Array[Byte], Array[Byte]]] {
 
-  override protected def handle(onNext: OnNext, failureHandle: Throwable ⇒ Unit): Unit = {
+  override protected def handle(onNext: OnNext, nrOfRetries: Int): Unit = {
     val record = onNext.element.asInstanceOf[TeleporterKafkaRecord]
     client.send(record.data, new Callback() {
       override def onCompletion(metadata: RecordMetadata, exception: Exception): Unit = {
         if (exception != null) {
-          failureHandle(exception)
+          failure(onNext, exception, nrOfRetries)
         } else {
-          record.toNext(record)
-          sender() ! Success(onNext)
+          success(onNext)
         }
       }
     })
   }
-
-  override def handle(onNext: OnNext): Unit = {}
 }
 
 class KafkaSubscriber(override val key: String)(implicit val center: TeleporterCenter) extends SubscriberSupport[Producer[Array[Byte], Array[Byte]]] {

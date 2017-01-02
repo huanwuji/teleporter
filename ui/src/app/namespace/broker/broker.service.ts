@@ -33,17 +33,20 @@ export class BrokerService extends ConfigService<Broker> {
       }),
       new TextboxFormItem({
         key: 'ip',
-        label: 'ip'
+        label: 'ip',
+        value: 'localhost'
       }),
       new TextboxFormItem({
         key: 'port',
         label: 'port',
-        type: 'number'
+        type: 'number',
+        value: '9021'
       }),
       new TextboxFormItem({
         key: 'tcpPort',
         label: 'tcpPort',
-        type: 'number'
+        type: 'number',
+        value: '9022'
       })
     ];
   }

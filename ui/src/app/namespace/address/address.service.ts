@@ -75,14 +75,20 @@ export class AddressService extends ConfigService<Address> {
         return this.getKafkaConsumerItems();
       case 'kafka_producer':
         return this.getKafkaProducerItems();
-      case 'dataSource':
-        return this.getDataSourceItems();
+      case 'jdbc':
+        return this.getJDBCItems();
       case 'mongo':
         return this.getMongoItems();
       case 'influxdb':
         return this.getInfluxdbItems();
       case 'taobao':
         return this.getTaobaoItems();
+      case 'elasticsearch':
+        return this.getElasticsearchItems();
+      case 'hdfs':
+        return this.getHDFSItems();
+      case 'hbase':
+        return this.getHBaseItems();
       default:
         throw "Can't found this type"
     }
@@ -142,12 +148,19 @@ export class AddressService extends ConfigService<Address> {
     ]
   }
 
-  private getDataSourceItems() {
+  private getJDBCItems() {
     return [
       new TextboxFormItem({key: 'jdbcUrl', label: 'jdbcUrl', value: 'jdbc:mysql://localhost:3306/database'}),
       new TextboxFormItem({key: 'username', label: 'username'}),
       new TextboxFormItem({key: 'password', label: 'password'}),
       new TextboxFormItem({key: 'maximumPoolSize', label: 'maximumPoolSize', type: 'number', value: 1})
+    ];
+  }
+
+  private getElasticsearchItems() {
+    return [
+      new TextboxFormItem({key: 'hosts', label: 'hosts', value: 'localhost:9300,localhost:9301'}),
+      new GroupFormItem({key: 'setting', label: 'setting'})
     ];
   }
 
@@ -162,6 +175,21 @@ export class AddressService extends ConfigService<Address> {
       new TextboxFormItem({key: 'host', label: 'host'}),
       new TextboxFormItem({key: 'port', label: 'port'}),
       new TextboxFormItem({key: 'db', label: 'db'})
+    ];
+  }
+
+  private getHDFSItems() {
+    return [
+      new TextboxFormItem({key: 'uri', label: 'uri'}),
+      new TextboxFormItem({key: 'conf', label: 'conf'}),
+      new TextboxFormItem({key: 'user', label: 'user'})
+    ];
+  }
+
+  private getHBaseItems() {
+    return [
+      new TextboxFormItem({key: 'hbase-default', label: 'hbase-default.xml'}),
+      new TextboxFormItem({key: 'hbase-site', label: 'hbase-site.xml'})
     ];
   }
 
@@ -185,6 +213,6 @@ export class RuntimeAddressService extends RuntimeService<RuntimeAddress> {
 
   owners(ns: string, address: string): Promise<KeyBean<RuntimeAddress>[]> {
     let key = `/address/${ns}/${address}/owners`;
-    return this.range(key, 0, 2000);
+    return this.range(key);
   }
 }

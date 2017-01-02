@@ -57,7 +57,7 @@ export class SourceService extends ConfigService<Source> {
         label: 'shadow',
         required: true
       }),
-      new ArrayFormItem({
+      new DynamicGroupFormItem({
         key: 'extraKeys',
         label: 'extraKeys'
       }),
@@ -84,14 +84,14 @@ export class SourceService extends ConfigService<Source> {
             value: this.getKafkaItems()
           })
         ];
-      case 'dataSource':
+      case 'jdbc':
         return [
           this.getTransactionItems(),
           this.getScheduleItems(),
           new GroupFormItem({
             key: 'client',
             label: 'client',
-            value: this.getDataSourceItems()
+            value: this.getJDBCItems()
           })
         ];
       case 'mongo':
@@ -188,7 +188,7 @@ export class SourceService extends ConfigService<Source> {
     ];
   }
 
-  private getDataSourceItems() {
+  private getJDBCItems() {
     return [
       new TextboxFormItem({key: 'sql', label: 'sql'}),
     ];

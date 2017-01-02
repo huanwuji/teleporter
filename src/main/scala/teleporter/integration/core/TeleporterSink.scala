@@ -14,10 +14,10 @@ import scala.reflect.{ClassTag, classTag}
   *
   * @author daikui
   */
-trait TeleporterSink extends SinkMetadata with LazyLogging {
-  var sinkApply = Map[String, Class[_]](
+trait TeleporterSink extends LazyLogging {
+  var sinkApply: Map[String, Class[_]] = Map[String, Class[_]](
     "kafka" → classOf[KafkaSubscriber],
-    "dataSource" → classOf[JdbcSubscriber],
+    "jdbc" → classOf[JdbcSubscriber],
     "elasticsearch" → classOf[ElasticSubscriber]
   )
 
@@ -26,8 +26,7 @@ trait TeleporterSink extends SinkMetadata with LazyLogging {
   def apply[T](key: String)(implicit center: TeleporterCenter): Sink[T, ActorRef] = {
     logger.info(s"Init sink, $key")
     val context = center.context.getContext[SinkContext](key)
-    implicit val config = context.config
-    Sink.actorSubscriber[T](Props(sinkApply(lnsCategory), key, center))
+    Sink.actorSubscriber[T](Props(sinkApply(context.config.category), key, center))
       .mapMaterializedValue {
         ref ⇒
           center.context.indexes.modifyByKey2(key, _.asInstanceOf[SinkContext].copy(actorRef = ref)); ref

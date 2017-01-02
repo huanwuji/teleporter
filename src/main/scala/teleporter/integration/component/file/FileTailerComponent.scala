@@ -2,7 +2,8 @@ package teleporter.integration.component.file
 
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, StandardOpenOption}
+import java.util
 
 import akka.actor.{Cancellable, Props}
 import akka.stream.actor.ActorPublisher
@@ -21,7 +22,7 @@ import scala.util.control.NonFatal
 object FileTailerComponent
 
 object FileTailerPublisher {
-  val Read = java.util.Collections.singleton(java.nio.file.StandardOpenOption.READ)
+  val Read: util.Set[StandardOpenOption] = java.util.Collections.singleton(java.nio.file.StandardOpenOption.READ)
 
   case object Deliver
 
@@ -38,7 +39,7 @@ class FileTailerPublisher(path: Path, end: Boolean) extends ActorPublisher[ByteS
   private var position: Long = _
   var last: Long = 0
 
-  override def preStart() = {
+  override def preStart(): Unit = {
     init()
     super.preStart()
   }
@@ -67,7 +68,8 @@ class FileTailerPublisher(path: Path, end: Boolean) extends ActorPublisher[ByteS
   @tailrec
   final def delivery(): Unit = {
     if (totalDemand > 0 && isActive) {
-      val newer: Boolean = Files.getLastModifiedTime(path).toMillis > last // IO-279, must be done first
+      val newer: Boolean = Files.getLastModifiedTime(path).toMillis > last
+      // IO-279, must be done first
       // Check the file length to see if it was rotated
       val length: Long = chan.size()
       if (length < position) {
@@ -105,7 +107,7 @@ class FileTailerPublisher(path: Path, end: Boolean) extends ActorPublisher[ByteS
         Int.MinValue
     }) match {
       case -1 | 0 | Int.MinValue ⇒ ByteString.empty
-      case readBytes ⇒
+      case _ ⇒
         inbuf.flip()
         val bs = ByteString.fromByteBuffer(inbuf)
         inbuf.clear()

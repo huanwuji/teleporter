@@ -1,7 +1,6 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
+import {ActivatedRoute, Router} from "@angular/router";
 import {AddressService, Address, RuntimeAddressService, RuntimeAddress} from "./address.service";
-import {Location} from "@angular/common";
 import {KeyBean} from "../../rest.servcie";
 import {FormItemService} from "../../dynamic/form/form-item.service";
 import {FormItemBase} from "../../dynamic/form/form-item";
@@ -14,6 +13,9 @@ import {FormGroup, FormControl} from "@angular/forms";
 export class AddressListComponent implements OnInit {
   private kbs: KeyBean<Address>[] = [];
   private ns: string;
+  private searchRegex: string = "";
+  private page: number = 0;
+  private pageSize: number = 20;
 
   constructor(private addressService: AddressService, private runtimeAddressService: RuntimeAddressService, private route: ActivatedRoute) {
   }
@@ -21,12 +23,13 @@ export class AddressListComponent implements OnInit {
   ngOnInit() {
     this.route.params.subscribe(params => {
       this.ns = params['ns'];
+      this.page = parseInt(params['page'] || 0);
       this.list();
     })
   }
 
   list() {
-    this.addressService.range(`/address/${this.ns}`, 0, 2000)
+    this.addressService.range(`/address/${this.ns}/${this.searchRegex}`, this.page, this.pageSize)
       .then((kbs: KeyBean<Address>[]) => this.kbs = kbs);
   }
 
@@ -58,7 +61,7 @@ export class AddressDetailComponent implements OnInit {
   private ns: string;
   private key: string;
 
-  constructor(private route: ActivatedRoute, private location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               private addressService: AddressService, private formItemService: FormItemService) {
   }
 
@@ -100,7 +103,7 @@ export class AddressDetailComponent implements OnInit {
   onSubmit() {
     let address = this.formGroup.value;
     this.addressService.save(this.fullKey(address.key), address)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${address.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

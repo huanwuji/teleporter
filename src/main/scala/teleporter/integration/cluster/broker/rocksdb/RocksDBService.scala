@@ -2,7 +2,7 @@ package teleporter.integration.cluster.broker.rocksdb
 
 import teleporter.integration.cluster.broker.PersistentProtocol.KeyValue
 import teleporter.integration.cluster.broker.PersistentService
-import teleporter.integration.component.rocksdb.RocksTable
+import teleporter.integration.component.kv.rocksdb.RocksTable
 import teleporter.integration.utils.Bytes._
 
 /**
@@ -27,7 +27,7 @@ class RocksDBService(table: RocksTable) extends PersistentService {
     table.range(key).slice(start, start + limit).map { case (k, v) ⇒ KeyValue(k, v) }.toSeq
   }
 
-  override def put(key: String, value: String): Unit = table.put(key, value)
+  override def unsafePut(key: String, value: String): Unit = table.put(key, value)
 
   override def delete(key: String): Unit = table.remove(key)
 

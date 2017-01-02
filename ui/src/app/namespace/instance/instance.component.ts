@@ -1,6 +1,5 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
-import {Location} from "@angular/common";
+import {ActivatedRoute, Router} from "@angular/router";
 import {InstanceService, Instance, RuntimeInstanceService} from "./instance.service";
 import {KeyBean} from "../../rest.servcie";
 import {FormItemService} from "../../dynamic/form/form-item.service";
@@ -26,7 +25,7 @@ export class InstanceListComponent implements OnInit {
   }
 
   list() {
-    this.instanceService.range(`/instance/${this.ns}`, 0, 2000)
+    this.instanceService.range(`/instance/${this.ns}`)
       .then(kbs => this.kbs = kbs);
   }
 
@@ -46,7 +45,7 @@ export class InstanceListComponent implements OnInit {
   }
 
   executorCmd(instance: string) {
-    var ws = new WebSocket(`ws://${window.location.host}/log?instance=${instance}`);
+    let ws = new WebSocket(`ws://${window.location.host}/log?instance=${instance}`);
     let requests = 10;
     let requestLogs = () => {
       while (requests > 0) {
@@ -55,7 +54,7 @@ export class InstanceListComponent implements OnInit {
       }
       setTimeout(requestLogs, 1000);
     };
-    ws.onopen = (event: Event)=> {
+    ws.onopen = (event: Event) => {
       console.log("trace will open", event);
       requestLogs();
     };
@@ -77,7 +76,7 @@ export class InstanceDetailComponent implements OnInit {
   private ns: string;
   private key: string;
 
-  constructor(private route: ActivatedRoute, private location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               private instanceService: InstanceService, private formItemService: FormItemService) {
   }
 
@@ -110,7 +109,7 @@ export class InstanceDetailComponent implements OnInit {
   onSubmit() {
     let instance = this.formGroup.value;
     this.instanceService.save(this.fullKey(instance.key), instance)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${instance.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

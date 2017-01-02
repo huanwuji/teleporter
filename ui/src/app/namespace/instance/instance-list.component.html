@@ -29,7 +29,7 @@
         <a *ngIf="kb.value.group" [routerLink]="[kb.value.group]">{{kb.value.group}}</a>
       </td>
       <td>
-        <a (click)="runtime(i, kb.key)">details</a>
+        <a (click)="runtime(i, kb.key)">📃</a>
         <div *ngIf="kb.value.runtime">{{kb.value.runtime|json}}</div>
       </td>
       <td>

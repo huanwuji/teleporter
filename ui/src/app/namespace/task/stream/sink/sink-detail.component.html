@@ -13,7 +13,8 @@
       <label for="category" class="col-sm-2 control-label">category</label>
       <select class="form-control" id="category" (change)="categoryChange($event)">
         <option value="kafka">kafka</option>
-        <option value="dataSource">dataSource</option>
+        <option value="jdbc">jdbc</option>
+        <option value="elasticsearch">elasticsearch</option>
       </select>
     </div>
     <div *ngFor="let formItem of formItems">

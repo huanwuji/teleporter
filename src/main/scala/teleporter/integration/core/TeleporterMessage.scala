@@ -12,7 +12,7 @@ import akka.actor.{Actor, ActorRef}
 case class TId(persistenceId: Long, seqNr: Long, channelId: Int = 0) {
   def toBytes: Array[Byte] = TId.keyToBytes(this)
 
-  def switchChannel(channelId: Int) = this.copy(channelId = channelId)
+  def switchChannel(channelId: Int): TId = this.copy(channelId = channelId)
 }
 
 object TId {
@@ -40,6 +40,6 @@ object TId {
 }
 
 case class TeleporterMessage[A](id: TId = TId.empty,
-                                          sourceRef: ActorRef = Actor.noSender,
-                                          data: A,
-                                          toNext: TeleporterMessage[A] ⇒ Unit = { msg: TeleporterMessage[A] ⇒ if (msg.sourceRef != null) msg.sourceRef ! msg.id })
+                                sourceRef: ActorRef = Actor.noSender,
+                                data: A,
+                                confirmed: TeleporterMessage[A] ⇒ Unit = { msg: TeleporterMessage[A] ⇒ if (msg.sourceRef != null) msg.sourceRef ! msg.id })

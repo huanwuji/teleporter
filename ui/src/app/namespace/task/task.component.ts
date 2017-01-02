@@ -1,7 +1,6 @@
 import {Component, OnInit} from "@angular/core";
 import {Task, TaskService} from "./task.service";
-import {ActivatedRoute} from "@angular/router";
-import {Location} from "@angular/common";
+import {ActivatedRoute, Router} from "@angular/router";
 import {KeyBean} from "../../rest.servcie";
 import {FormItemBase} from "../../dynamic/form/form-item";
 import {FormGroup, FormControl} from "@angular/forms";
@@ -26,8 +25,8 @@ export class TaskListComponent implements OnInit {
   }
 
   list() {
-    this.taskService.range(`/task/${this.ns}`, 0, 2000)
-      .then((kbs: KeyBean<Task>[])=> this.kbs = kbs);
+    this.taskService.range(`/task/${this.ns}`)
+      .then((kbs: KeyBean<Task>[]) => this.kbs = kbs);
   }
 
   del(key: string) {
@@ -52,7 +51,7 @@ export class TaskDetailComponent implements OnInit {
   private ns: string;
   private key: string;
 
-  constructor(private route: ActivatedRoute, private location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               private taskService: TaskService, private formItemService: FormItemService) {
   }
 
@@ -85,7 +84,7 @@ export class TaskDetailComponent implements OnInit {
   onSubmit() {
     let task = this.formGroup.value;
     this.taskService.save(this.fullKey(task.key), task)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${task.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

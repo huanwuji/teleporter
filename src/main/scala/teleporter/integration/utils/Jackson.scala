@@ -16,7 +16,7 @@ object Jackson {
     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
     .registerModule(DefaultScalaModule)
 
-  implicit def toString[T <: AnyRef](o: T): String = {
+  implicit def toStr[T <: AnyRef](o: T): String = {
     mapper.writeValueAsString(o)
   }
 }

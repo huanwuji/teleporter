@@ -23,7 +23,7 @@ trait Bytes {
 
   implicit def toBytes(value: BigDecimal): Array[Byte] = java.lang.Double.doubleToLongBits(value.toDouble)
 
-  implicit def toBytes(string: String): Array[Byte] = string.getBytes(Charsets.UTF_8)
+  implicit def toBytes(value: String): Array[Byte] = value.getBytes(Charsets.UTF_8)
 
   implicit def toBoolean(b: Array[Byte]): Boolean = b(0) != 0
 

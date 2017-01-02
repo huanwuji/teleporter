@@ -1,10 +1,9 @@
 import {Component, OnInit} from "@angular/core";
-import {ActivatedRoute} from "@angular/router";
+import {ActivatedRoute, Router} from "@angular/router";
 import {NamespaceService, Namespace} from "./namespace.service";
 import {KeyBean} from "../rest.servcie";
 import {FormItemBase} from "../dynamic/form/form-item";
 import {FormGroup, FormControl} from "@angular/forms";
-import {Location} from "@angular/common";
 import {FormItemService} from "../dynamic/form/form-item.service";
 
 @Component({
@@ -22,7 +21,7 @@ export class NamespaceListComponent implements OnInit {
   }
 
   list() {
-    this.namespaceService.range('/ns', 0, 2000)
+    this.namespaceService.range('/ns')
       .then(kbs => this.kbs = kbs);
   }
 
@@ -41,7 +40,7 @@ export class NamespaceDetailComponent implements OnInit {
   private payLoad: string;
   private key: string;
 
-  constructor(private route: ActivatedRoute, private location: Location,
+  constructor(private route: ActivatedRoute, private router: Router,
               private namespaceService: NamespaceService, private formItemService: FormItemService) {
   }
 
@@ -73,7 +72,7 @@ export class NamespaceDetailComponent implements OnInit {
   onSubmit() {
     let namespace = this.formGroup.value;
     this.namespaceService.save(this.fullKey(namespace.key), namespace)
-      .then(v => this.location.back());
+      .then(kb => this.router.navigate([`../${namespace.key}`], {relativeTo: this.route}));
   }
 
   private fullKey(key: string) {

@@ -19,13 +19,13 @@ object Broker {
     implicit val system = ActorSystem("broker", config)
     implicit val mater = ActorMaterializer()
     import system.dispatcher
-    val teleporterConfig = config.getConfig("teleporter")
-    val (configService, runtimeService) = PersistentService(teleporterConfig)
+    val brokerConfig = config.getConfig("teleporter")
+    val (configService, runtimeService) = PersistentService(brokerConfig)
     val connectionKeepers = TrieMap[String, ConnectionKeeper]()
     val configNotify = system.actorOf(Props(classOf[ConfigNotify], connectionKeepers, configService, runtimeService))
     val eventListener = EventListener[TeleporterEvent]()
-    val (bind, port, tcpPort) = (teleporterConfig.getString("bind"), teleporterConfig.getInt("port"), teleporterConfig.getInt("tcpPort"))
-    RpcServer(bind, tcpPort, configService, runtimeService, connectionKeepers, eventListener)
+    val (bind, port, tcpPort) = (brokerConfig.getString("bind"), brokerConfig.getInt("port"), brokerConfig.getInt("tcpPort"))
+    RpcServer(bind, tcpPort, configService, runtimeService, configNotify, connectionKeepers, eventListener)
     HttpServer(bind, port, configNotify, configService, runtimeService, connectionKeepers, eventListener)
   }
 }

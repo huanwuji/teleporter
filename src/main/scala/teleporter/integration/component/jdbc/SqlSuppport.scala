@@ -4,10 +4,12 @@ import java.sql.{Connection, PreparedStatement, ResultSet, Statement}
 import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 
-import com.google.common.cache.{CacheBuilder, CacheLoader}
+import com.google.common.cache.{CacheBuilder, CacheLoader, LoadingCache}
 import org.apache.commons.dbutils.DbUtils
 import teleporter.integration.script.Template
 import teleporter.integration.utils.Use
+
+import scala.util.matching.Regex
 
 /**
   * Author: kui.dai
@@ -28,12 +30,12 @@ case class NameSql(sql: String, binds: Map[String, Any]) extends Sql {
 case class PreparedSql(sql: String, params: Seq[Any]) extends Sql
 
 object PreparedSql {
-  val paramRegex = "#\\{.+?\\}".r
-  val paramGroupRegex = "#\\{(.+?)\\}".r
+  val paramRegex: Regex = "#\\{.+?\\}".r
+  val paramGroupRegex: Regex = "#\\{(.+?)\\}".r
 
   case class PredefinedSql(sql: String, paramNames: Seq[String])
 
-  lazy val preparedSqlCache = CacheBuilder.newBuilder()
+  lazy val preparedSqlCache: LoadingCache[String, PredefinedSql] = CacheBuilder.newBuilder()
     .maximumSize(1000).expireAfterWrite(1, TimeUnit.HOURS).build(new CacheLoader[String, PredefinedSql]() {
     override def load(nameSql: String): PredefinedSql = {
       val preparedParams = paramGroupRegex.findAllMatchIn(nameSql).map(_.group(1)).toIndexedSeq
@@ -130,7 +132,7 @@ trait SqlSupport extends Use {
         }
     }
 
-  def toMap(rs: ResultSet) = {
+  def toMap(rs: ResultSet): Map[String, Any] = {
     val metaData = rs.getMetaData
     (1 to rs.getMetaData.getColumnCount).foldLeft(Map.newBuilder[String, Any]) { (b, i) ⇒
       val label = metaData.getColumnLabel(i)
@@ -153,7 +155,7 @@ trait SqlSupport extends Use {
         ps.setObject(i, param)
         i += 1
       }
-      logger.info(s"bulk query sql: ${preparedSql}")
+      logger.info(s"bulk query sql: $preparedSql")
       rs = ps.executeQuery()
       SqlResult[Iterator[T]](
         conn = conn,
@@ -194,7 +196,7 @@ trait SqlSupport extends Use {
 
   def query[T](conn: Connection, preparedSql: PreparedSql)(mapper: ResultSet ⇒ T): Iterable[T] = {
     using(conn) {
-      _conn ⇒
+      _ ⇒
         using(conn.prepareStatement(preparedSql.sql)) {
           ps ⇒
             conn.prepareStatement(preparedSql.sql)
@@ -205,11 +207,12 @@ trait SqlSupport extends Use {
               i += 1
             }
             using(ps.executeQuery()) {
-              rs ⇒ new Iterator[T] {
-                override def hasNext: Boolean = rs.next()
+              rs ⇒
+                new Iterator[T] {
+                  override def hasNext: Boolean = rs.next()
 
-                override def next(): T = mapper(rs)
-              }.toIndexedSeq
+                  override def next(): T = mapper(rs)
+                }.toIndexedSeq
             }
         }
     }

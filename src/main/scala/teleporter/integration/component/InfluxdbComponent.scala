@@ -9,9 +9,8 @@ import akka.stream.scaladsl.Flow
 import com.typesafe.scalalogging.LazyLogging
 import teleporter.integration._
 import teleporter.integration.component.Influxdb.InfluxdbServer
-import teleporter.integration.core.{AddressContext, AddressMetadata, AutoCloseClientRef}
+import teleporter.integration.core.{AddressContext, AddressMetaBean, AutoCloseClientRef}
 import teleporter.integration.metrics.Metrics.Measurement
-import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.SimpleHttpClient
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -24,10 +23,21 @@ object Influxdb {
   type InfluxdbServer = Flow[HttpRequest, HttpResponse, Future[OutgoingConnection]]
 }
 
-trait InfluxdbMetadata {
+object InfluxdbMetaBean {
   val FHost = "host"
   val FPort = "port"
   val FDb = "db"
+}
+
+trait InfluxdbMetaBean extends AddressMetaBean {
+
+  import InfluxdbMetaBean._
+
+  def host: String = client[String](FHost)
+
+  def port: Int = client[Int](FPort)
+
+  def db: String = client[String](FDb)
 }
 
 case class InfluxDto(measurement: Measurement, data: Map[String, Any], timestamp: Long)
@@ -62,15 +72,11 @@ object InfluxdbClient {
   def apply(connection: InfluxdbServer, dbName: String): InfluxdbClient = new InfluxdbClientImpl(connection, dbName)
 }
 
-object InfluxdbComponent extends InfluxdbMetadata with AddressMetadata {
+object InfluxdbComponent extends {
   def influxdbApply: ClientApply = (key, center) ⇒ {
     import center.system
-    implicit val config = center.context.getContext[AddressContext](key).config
-    val clientConfig = lnsClient
-    val host = clientConfig[String](FHost)
-    val port = clientConfig[Int](FPort)
-    val dbName = clientConfig[String](FDb)
-    val outgoingConnection = Http().outgoingConnection(host = host, port = port)
-    AutoCloseClientRef(key, InfluxdbClient(outgoingConnection, dbName))
+    val config = center.context.getContext[AddressContext](key).config.mapTo[InfluxdbMetaBean]
+    val outgoingConnection = Http().outgoingConnection(host = config.host, port = config.port)
+    AutoCloseClientRef(key, InfluxdbClient(outgoingConnection, config.db))
   }
 }

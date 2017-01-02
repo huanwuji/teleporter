@@ -1,5 +1,7 @@
 package teleporter.integration.utils
 
+import scala.reflect.{ClassTag, classTag}
+
 /**
   * Author: kui.dai
   * Date: 2016/6/27.
@@ -7,7 +9,7 @@ package teleporter.integration.utils
 trait MapBean extends Converters with Convert {
   val underlying: Map[String, Any]
 
-  def __dict__[A](paths: String*)(implicit converter: Converter[A]): Option[A] = {
+  def get[A](paths: String*)(implicit converter: Converter[A]): Option[A] = {
     val v = paths match {
       case head :: Nil ⇒ getValues(underlying, head)
       case _ ⇒ getValues(underlying, paths)
@@ -15,7 +17,7 @@ trait MapBean extends Converters with Convert {
     v.flatMap(toOption[A])
   }
 
-  def __dicts__[A](paths: String*)(implicit converter: Converter[A]): Seq[A] = {
+  def gets[A](paths: String*)(implicit converter: Converter[A]): Seq[A] = {
     val v = paths match {
       case head :: Nil ⇒ getValues(underlying, head)
       case _ ⇒ getValues(underlying, paths)
@@ -24,7 +26,7 @@ trait MapBean extends Converters with Convert {
   }
 
   def apply[A](paths: String*)(implicit converter: Converter[A]): A = {
-    this.__dict__[A](paths: _*).get
+    this.get[A](paths: _*).get
   }
 
   def ++(kv: (String, Any)*): Map[String, Any] = underlying ++ kv
@@ -68,12 +70,25 @@ trait MapBean extends Converters with Convert {
     }
   }
 
+  def mapTo[T <: MapMetaBean : ClassTag]: T = {
+    classTag[T].runtimeClass.getConstructor(classOf[Map[String, Any]]).newInstance(underlying).asInstanceOf[T]
+  }
+
   override def toString: String = underlying.toString()
 }
 
 class MapBeanImpl(val underlying: Map[String, Any]) extends MapBean
 
-trait MapMetadata
+trait MapMetaBean extends MapBean
+
+object MapMetaBean {
+  def apply[T <: MapBean : ClassTag](map: Map[String, Any]): T = {
+    classTag[T].runtimeClass.getConstructor(classOf[Map[String, Any]]).newInstance(map)
+      .asInstanceOf[T]
+  }
+
+  def apply[T <: MapBean : ClassTag](bean: MapBean): T = apply(bean.toMap)
+}
 
 object MapBean extends Converters {
   val empty = MapBean(Map())

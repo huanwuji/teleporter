@@ -50,7 +50,7 @@ export class SinkService extends ConfigService<Sink> {
         label: 'address',
         required: true
       }),
-      new ArrayFormItem({
+      new DynamicGroupFormItem({
         key: 'extraKeys',
         label: 'extraKeys'
       }),
@@ -74,8 +74,10 @@ export class SinkService extends ConfigService<Sink> {
     switch (category) {
       case 'kafka':
         return this.getKafkaItems();
-      case 'dataSource':
-        return this.getDataSourceItems();
+      case 'jdbc':
+        return this.getJDBCItems();
+      case 'elasticsearch':
+        return this.getElasticserach();
       default:
         return this.getKafkaItems();
     }
@@ -85,7 +87,11 @@ export class SinkService extends ConfigService<Sink> {
     return [];
   }
 
-  private getDataSourceItems(): FormItemBase<any>[] {
+  private getElasticserach(): FormItemBase<any>[] {
+    return [];
+  }
+
+  private getJDBCItems(): FormItemBase<any>[] {
     return [
       new TextboxFormItem({
         key: 'parallelism',

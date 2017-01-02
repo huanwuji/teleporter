@@ -2,7 +2,8 @@ package teleporter.integration.core
 
 import teleporter.integration.ClientApply
 import teleporter.integration.component.hbase.HbaseComponent
-import teleporter.integration.component.jdbc.DataSourceComponent
+import teleporter.integration.component.hdfs.HdfsComponent
+import teleporter.integration.component.jdbc.JdbcComponent
 import teleporter.integration.component.mongo.MongoComponent
 import teleporter.integration.component.taobao.TaobaoComponent
 import teleporter.integration.component.{ElasticComponent, _}
@@ -25,22 +26,23 @@ class CloseClientRef[A](val key: String, val client: A, closeHandler: CloseClien
 
 case class AutoCloseClientRef[A <: AutoCloseable](override val key: String, override val client: A) extends CloseClientRef[A](key, client, _.client.close())
 
-trait TeleporterAddress extends AddressMetadata {
+trait TeleporterAddress {
 
   private val clientApplies = TrieMap[String, ClientApply](
     "kafka_producer" → KafkaComponent.kafkaProducerApply,
     "kafka_consumer" → KafkaComponent.kafkaConsumerApply,
-    "dataSource" → DataSourceComponent.dataSourceApply,
+    "jdbc" → JdbcComponent.jdbcApply,
     "hbase.common" → HbaseComponent.hbaseApply,
     "elasticsearch" → ElasticComponent.elasticClientApply,
     "mongo" → MongoComponent.mongoApply,
     "influxdb" → InfluxdbComponent.influxdbApply,
+    "hdfs" → HdfsComponent.hdfsApply,
     "taobao" → TaobaoComponent.taobaoClientApply
   )
 
   def apply[A](key: String)(implicit center: TeleporterCenter): A = {
     val context = center.context.getContext[AddressContext](key)
-    context.clientRefs(key, clientApplies(lnsCategory(context.config))).asInstanceOf[A]
+    context.clientRefs(key, clientApplies(context.config.category)).asInstanceOf[A]
   }
 
   def registerType(category: String, factory: ClientApply): Unit = {
