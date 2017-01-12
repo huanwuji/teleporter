@@ -11,7 +11,7 @@ import com.google.common.cache.CacheBuilder
 import com.google.common.hash.Hashing
 import com.markatta.akron.CronTab.{UnSchedule, UnScheduled}
 import com.markatta.akron.{CronExpression, CronTab}
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.core.Streams.{ExecuteStream, _}
 import teleporter.integration.script.ScriptEngines
 import teleporter.integration.utils.CronFixed
@@ -27,7 +27,7 @@ import scala.util.{Failure, Success}
   */
 case class StreamState(returnValues: ReturnValues)
 
-class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyLogging {
+class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Logging {
 
   import center.materializer
   import context.dispatcher
@@ -51,6 +51,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
       delay match {
         case Duration.Zero ⇒ self ! command
         case d: FiniteDuration ⇒ context.system.scheduler.scheduleOnce(d, self, command)
+        case _ ⇒
       }
     case CronCommand(command, cron) ⇒
       val fixedCron = CronFixed.fixed(cron)
@@ -125,7 +126,9 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with LazyL
       })
     logger.info(s"$key stream will executed")
     val (_, resultListener) = streamLogic(key, center)
-    resultListener.onComplete {
+    resultListener.map { _ ⇒
+      center.context.unRegister(key)
+    } onComplete {
       case Success(v) ⇒ logger.info(s"$key was completed, $v")
       case Failure(e) ⇒ logger.error(s"$key execute failed", e)
     }

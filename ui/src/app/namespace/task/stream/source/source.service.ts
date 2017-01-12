@@ -114,13 +114,6 @@ export class SourceService extends ConfigService<Source> {
       key: 'transaction',
       label: 'transaction',
       value: [
-        new CheckboxFormItem({
-          key: 'recoveryPointEnabled',
-          label: 'recoveryPointEnabled',
-          required: true,
-          type: 'number',
-          value: true
-        }),
         new TextboxFormItem({
           key: 'channelSize',
           label: 'channelSize',
@@ -129,36 +122,24 @@ export class SourceService extends ConfigService<Source> {
           value: 1
         }),
         new TextboxFormItem({
-          key: 'maxBlockNum',
-          label: 'maxBlockNum',
+          key: 'batchSize',
+          label: 'batchSize',
           required: true,
           type: 'number',
-          value: 5
+          value: 512
         }),
         new TextboxFormItem({
-          key: 'blockSize',
-          label: 'blockSize',
+          key: 'cacheSize',
+          label: 'cacheSize',
           required: true,
           type: 'number',
-          value: 500
+          value: 512
         }),
         new TextboxFormItem({
           key: 'maxAge',
           label: 'maxAge',
           required: true,
           value: '1.minutes'
-        }),
-        new CheckboxFormItem({
-          key: 'timeoutRetry',
-          label: 'timeoutRetry',
-          required: true,
-          value: true
-        }),
-        new TextboxFormItem({
-          key: 'commitDelay',
-          label: 'commitDelay',
-          placeholder: '1.minutes',
-          required: true
         })
       ]
     });
@@ -166,8 +147,8 @@ export class SourceService extends ConfigService<Source> {
 
   private getScheduleItems() {
     return new GroupFormItem({
-      key: 'schedule',
-      label: 'schedule',
+      key: 'roller',
+      label: 'roller',
       value: [
         new TextboxFormItem({key: 'page', label: 'page', type: 'number'}),
         new TextboxFormItem({key: 'pageSize', label: 'pageSize', type: 'number'}),
@@ -198,7 +179,7 @@ export class SourceService extends ConfigService<Source> {
     return [
       new TextboxFormItem({key: 'database', label: 'database'}),
       new TextboxFormItem({key: 'collection', label: 'collection'}),
-      new TextboxFormItem({key: 'query', label: 'query'}),
+      new TextboxFormItem({key: 'filter', label: 'filter'}),
     ];
   }
 }

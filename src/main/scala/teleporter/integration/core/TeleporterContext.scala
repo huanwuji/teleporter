@@ -1,19 +1,17 @@
 package teleporter.integration.core
 
 import akka.actor.{Actor, ActorRef, Props}
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.ActorTestMessages.{Ping, Pong}
-import teleporter.integration.ClientApply
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
 import teleporter.integration.cluster.broker.PersistentProtocol.{Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.SendMessage
-import teleporter.integration.cluster.rpc.proto.Rpc.{EventType, TeleporterEvent}
-import teleporter.integration.cluster.rpc.proto.broker.Broker.{LinkAddress, LinkVariable}
+import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
+import teleporter.integration.cluster.rpc.{LinkAddress, LinkVariable, TeleporterEvent}
 import teleporter.integration.core.TeleporterContext.{SyncBroker, _}
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{MultiIndexMap, TwoIndexMap}
 
-import scala.collection.JavaConverters._
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
 
@@ -98,74 +96,48 @@ case class SinkContext(id: Long, key: String, config: SinkMetaBean, actorRef: Ac
   }
 }
 
-object ClientRefs {
-  def apply[A](share: Boolean): ClientRefs[A] =
-    if (share) {
-      new ShareClientRefs[A]
-    } else {
-      new MultiClientRefs[A]
-    }
+trait ClientRef[+A] {
+  val key: String
+  val client: A
 }
 
-trait ClientRefs[A] {
-  def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A
-
-  def close(key: String)(implicit center: TeleporterCenter): Unit
+abstract class CloseClientRef[A](val key: String, val client: A) extends ClientRef[A] with AutoCloseable {
+  override def close(): Unit
 }
 
-class ShareClientRefs[A] extends ClientRefs[A] with LazyLogging {
-  var clientRef: ClientRef[A] = _
-  var keys: Set[String] = Set.empty
-
-  override def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A = {
-    synchronized {
-      if (clientRef == null) {
-        logger.info(s"create share address $key")
-        clientRef = clientApply(key, center).asInstanceOf[ClientRef[A]]
-        keys = keys + key
-      }
-    }
-    clientRef.client
-  }
-
-  override def close(key: String)(implicit center: TeleporterCenter): Unit = {
-    synchronized {
-      keys = keys - key
-      if (keys.isEmpty) {
-        clientRef match {
-          case client: AutoCloseClientRef[A] ⇒
-            client.close()
-            logger.info(s"close share client $key")
-          case _ ⇒ //Nothing to do
-        }
-      }
-    }
-  }
+case class AutoCloseClientRef[A <: AutoCloseable](override val key: String, override val client: A) extends CloseClientRef[A](key, client) {
+  override def close(): Unit = client.close()
 }
 
-class MultiClientRefs[A] extends ClientRefs[A] with LazyLogging {
-  val clientRefs: TrieMap[String, ClientRef[A]] = TrieMap[String, ClientRef[A]]()
-
-  override def apply(key: String, clientApply: ClientApply)(implicit center: TeleporterCenter): A = {
-    logger.info(s"create multi address $key")
-    clientRefs.getOrElseUpdate(key, clientApply(key, center).asInstanceOf[ClientRef[A]]).client
-  }
-
-  override def close(key: String)(implicit center: TeleporterCenter): Unit = {
-    clientRefs.remove(key).foreach {
-      case client: AutoCloseClientRef[A] ⇒
-        client.close()
-        logger.info(s"close multi client $key")
-      case _ ⇒ //Nothing to do
-    }
-  }
-}
-
-case class AddressContext(id: Long, key: String, config: AddressMetaBean, linkKeys: Set[String], clientRefs: ClientRefs[Any]) extends ExtraKeys with ComponentContext
+case class AddressContext(id: Long, key: String, config: AddressMetaBean, linkKeys: Set[String]) extends ExtraKeys with ComponentContext
 
 case class VariableContext(id: Long, key: String, config: VariableMetaBean, linkKeys: Set[String]) extends ComponentContext
 
-trait TeleporterContext {
+trait Addresses extends Logging {
+  private val addressIndexes = new TrieMap[String, TrieMap[String, CloseClientRef[_]]]
+
+  def register[A](addressKey: String, bindKey: String, clientRef: () ⇒ CloseClientRef[A]): CloseClientRef[A] = {
+    addressIndexes.getOrElseUpdate(bindKey, TrieMap[String, CloseClientRef[_]]())
+      .getOrElseUpdate(addressKey, clientRef()).asInstanceOf[CloseClientRef[A]]
+  }
+
+  def unRegister(bindKey: String): Unit =
+    addressIndexes.remove(bindKey).foreach(_.keys.foreach(unRegister(bindKey, _)))
+
+  def unRegister(bindKey: String, addressKey: String): Unit = {
+    addressIndexes.get(bindKey).foreach(_.get(addressKey)
+      .foreach { clientRef ⇒
+        try {
+          logger.info(s"client will closed, $bindKey, $addressKey")
+          clientRef.close()
+        } catch {
+          case ex: Exception ⇒ logger.warn(s"Closed client error, $bindKey, $addressKey, ${ex.getMessage}", ex)
+        }
+      })
+  }
+}
+
+trait TeleporterContext extends Addresses {
   val indexes: TwoIndexMap[Long, ComponentContext]
 
   val ref: ActorRef
@@ -177,14 +149,14 @@ trait TeleporterContext {
 
 class TeleporterContextImpl(val ref: ActorRef, val indexes: TwoIndexMap[Long, ComponentContext]) extends TeleporterContext
 
-class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(implicit center: TeleporterCenter) extends Actor {
-  override def receive: Receive = updateContext().orElse(triggerChange).orElse(defaultReceive)
+class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(implicit center: TeleporterCenter) extends Actor with Logging {
+  override def receive: Receive = contextHandle().orElse(triggerChange).orElse(defaultReceive)
 
   private def defaultReceive: Receive = {
     case Ping ⇒ sender() ! Pong
   }
 
-  private def updateContext(): Receive = {
+  private def contextHandle(): Receive = {
     case Upsert(ctx: ComponentContext, trigger) ⇒
       ctx match {
         case streamContext: StreamContext if streamContext.config.status != StreamStatus.NORMAL ⇒
@@ -245,7 +217,8 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
       indexes.removeKey1(ctx.id)
       ctx.config.extraKeys.toMap.values.foreach { case (_, v: String) ⇒ removeLinkKeys(v) }
       ctx match {
-        case ctx: PartitionContext ⇒ ctx.streams().foreach(self ! Remove(_))
+        case ctx: PartitionContext ⇒
+          ctx.streams().foreach(self ! Remove(_))
         case ctx: TaskContext ⇒ ctx.streams().foreach(self ! Remove(_))
         case ctx: StreamContext ⇒
           ctx.sources().foreach(self ! Remove(_))
@@ -262,32 +235,17 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
       ctx match {
         case ctx: AddressContext ⇒
           center.eventListener.asyncEvent { seqNr ⇒
-            center.brokers ! SendMessage(TeleporterEvent.newBuilder()
-              .setRole(TeleporterEvent.Role.CLIENT)
-              .setSeqNr(seqNr)
-              .setType(EventType.LinkAddress)
-              .setBody(
-                LinkAddress.newBuilder()
-                  .setAddress(ctx.key)
-                  .setInstance(center.instanceKey)
-                  .addAllKeys(ctx.linkKeys.asJava)
-                  .setTimestamp(System.currentTimeMillis())
-                  .build().toByteString
-              ).build())
+            center.brokers ! SendMessage(
+              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkAddress, role = Role.CLIENT,
+                body = LinkAddress(address = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
+            )
           }
         case ctx: VariableContext ⇒
           center.eventListener.asyncEvent { seqNr ⇒
-            center.brokers ! SendMessage(TeleporterEvent.newBuilder()
-              .setRole(TeleporterEvent.Role.CLIENT)
-              .setSeqNr(seqNr)
-              .setType(EventType.LinkVariable)
-              .setBody(
-                LinkVariable.newBuilder()
-                  .setVariableKey(ctx.key)
-                  .setInstance(center.instanceKey)
-                  .addAllKeys(ctx.linkKeys.asJava)
-                  .build().toByteString
-              ).build())
+            center.brokers ! SendMessage(
+              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkVariable, role = Role.CLIENT,
+                body = LinkVariable(variableKey = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
+            )
           }
       }
   }

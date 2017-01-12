@@ -5,8 +5,8 @@ import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
 import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.stream.Materializer
 import akka.stream.scaladsl.{Flow, Sink, Source}
-import com.typesafe.scalalogging.LazyLogging
 import de.heikoseeberger.akkahttpjson4s.Json4sSupport
+import org.apache.logging.log4j.scala.Logging
 import org.json4s.{DefaultFormats, native}
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -15,7 +15,7 @@ import scala.concurrent.{ExecutionContext, Future}
   * Author: kui.dai
   * Date: 2016/6/28.
   */
-trait SimpleHttpClient extends LazyLogging {
+trait SimpleHttpClient extends Logging {
 
   import Json4sSupport._
 

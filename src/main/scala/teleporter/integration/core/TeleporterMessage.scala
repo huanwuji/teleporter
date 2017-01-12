@@ -2,7 +2,7 @@ package teleporter.integration.core
 
 import java.nio.ByteBuffer
 
-import akka.actor.{Actor, ActorRef}
+import akka.stream.stage.AsyncCallback
 
 /**
   * date 2015/8/3.
@@ -39,7 +39,30 @@ object TId {
   }
 }
 
-case class TeleporterMessage[A](id: TId = TId.empty,
-                                sourceRef: ActorRef = Actor.noSender,
-                                data: A,
-                                confirmed: TeleporterMessage[A] ⇒ Unit = { msg: TeleporterMessage[A] ⇒ if (msg.sourceRef != null) msg.sourceRef ! msg.id })
+trait Message[+T] {
+  def data: T
+}
+
+case class DefaultMessage[T](data: T) extends Message[T]
+
+case class SourceMessage[XY, T](coordinate: XY, data: T) extends Message[T]
+
+case class AckMessage[XY, T](id: TId, coordinate: XY, data: T, confirmed: AsyncCallback[TId]) extends Message[T] {
+  def toTransferMessage: TransferMessage[T] = TransferMessage(id, data)
+
+  def map[B](f: T ⇒ B): AckMessage[XY, B] = this.copy(data = f(data))
+
+  def toMessage[B]: Message[B] = asInstanceOf[Message[B]]
+}
+
+case class TransferMessage[T](id: TId, data: T) extends Message[T]
+
+object Message {
+  def apply[T](data: T) = DefaultMessage(data)
+
+  def source[XY, T](coordinate: XY, data: T) = SourceMessage(coordinate, data)
+
+  def ack[XY, T](id: TId, coordinate: XY, data: T, confirmed: AsyncCallback[TId]) = AckMessage(id, coordinate, data, confirmed)
+
+  def transfer[T](id: TId, data: T) = TransferMessage(id, data)
+}

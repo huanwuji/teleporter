@@ -1,14 +1,14 @@
 package teleporter.integration.utils
 
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
- * Author: kui.dai
- * Date: 2015/11/26.
- */
-trait Use extends LazyLogging {
+  * Author: kui.dai
+  * Date: 2015/11/26.
+  */
+trait Use extends Logging {
 
   type Closable = AutoCloseable
 

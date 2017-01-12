@@ -8,7 +8,7 @@ import akka.stream._
 import akka.stream.scaladsl.Tcp.{IncomingConnection, ServerBinding}
 import akka.stream.scaladsl._
 import akka.util.ByteString
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.component.tcp.TlsHelper
 import teleporter.integration.core.{TId, TeleporterCenter}
 
@@ -19,7 +19,7 @@ import scala.concurrent.duration._
   * Author: kui.dai
   * Date: 2016/4/18.
   */
-trait TlsTcpAgent extends LazyLogging {
+trait TlsTcpAgent extends Logging {
   def agentStart[Out, M](serverBinding: Source[IncomingConnection, Future[ServerBinding]],
                          sink: ⇒ Graph[SinkShape[Out], M],
                          decoder: (ByteString, ActorRef) ⇒ scala.collection.immutable.Seq[Out],

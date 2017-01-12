@@ -3,6 +3,8 @@ package teleporter.integration.metrics
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+import akka.NotUsed
+import akka.stream.scaladsl.Flow
 import com.google.common.base.Stopwatch
 import teleporter.integration.metrics.Metrics.{Count, Measurement, Time}
 
@@ -33,6 +35,23 @@ object Metrics {
     val str = s"$name${if (tags.isEmpty) "" else "," + tags.map(tag ⇒ s"${tag.key}=${tag.value}").mkString(",")}"
   }
 
+  def count[T](name: String)(implicit registry: MetricRegistry): Flow[T, T, NotUsed] = {
+    count[T](Measurement(name))
+  }
+
+  def count[T](measurement: Measurement)(implicit registry: MetricRegistry): Flow[T, T, NotUsed] = {
+    val metrics = registry.counter(measurement)
+    Flow[T].map[T] { t ⇒ metrics.inc(); t }
+  }
+
+  def time[T](name: String, f: ⇒ T)(implicit registry: MetricRegistry): Flow[T, T, NotUsed] = {
+    time[T](Measurement(name), f)
+  }
+
+  def time[T](measurement: Measurement, f: ⇒ T)(implicit registry: MetricRegistry): Flow[T, T, NotUsed] = {
+    val metrics = registry.timer(measurement)
+    Flow[T].map[T] { t ⇒ metrics.time(f); t }
+  }
 }
 
 object MetricsImplicits {
@@ -52,7 +71,7 @@ object MetricsImplicits {
 
 class MetricsCounter extends Metrics[Count] {
   val count = new AtomicLong()
-  var current = System.currentTimeMillis()
+  var current: Long = System.currentTimeMillis()
 
   def inc(inc: Long = 1L): Unit = {
     count.addAndGet(inc)
@@ -99,7 +118,7 @@ class MetricsTimer extends Metrics[Time] {
 }
 
 class MetricRegistry {
-  val metrics = TrieMap[Measurement, Any]()
+  val metrics: TrieMap[Measurement, Any] = TrieMap[Measurement, Any]()
 
   def counter(measurement: Measurement): MetricsCounter = metrics.getOrElseUpdate(measurement, new MetricsCounter).asInstanceOf[MetricsCounter]
 

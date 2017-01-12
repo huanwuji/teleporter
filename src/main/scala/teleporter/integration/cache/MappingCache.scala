@@ -6,6 +6,8 @@ import javax.annotation.concurrent.ThreadSafe
 
 import com.google.common.cache.{Cache, CacheBuilder}
 import com.google.common.util.concurrent.Striped
+import teleporter.integration.core.TeleporterCenter
+import teleporter.integration.utils.Converter
 
 import scala.concurrent.duration.{Duration, _}
 
@@ -21,7 +23,8 @@ trait MappingCache[T <: CacheValue] {
   val locks: Striped[Lock] = Striped.lazyWeakLock(stripes)
 
   @ThreadSafe
-  def compareAndPut(key: Array[Byte], timeVersion: Long, externalGet: ⇒ Option[T], update: T, compare: (Option[T], T) ⇒ Boolean): Boolean = {
+  def compareAndPut(key: Array[Byte], timeVersion: Long, externalGet: ⇒ Option[T], update: T, compare: (Option[T], T) ⇒ Boolean)
+                   (implicit converter: Converter[T]): Boolean = {
     val lock = locks.get(util.Arrays.hashCode(key))
     lock.lock()
     try {
@@ -36,14 +39,16 @@ trait MappingCache[T <: CacheValue] {
     }
   }
 
-  def get(key: Array[Byte], timeVersion: Long = -1, externalGet: ⇒ Option[T]): Option[T] = {
-    localCache.get(key).orElse {
-      if (timeVersion == -1 || timeVersion < localCacheTrustTime) {
-        externalGet
-      } else {
-        None
+  def get(key: Array[Byte], timeVersion: Long = -1, externalGet: ⇒ Option[T])
+         (implicit converter: Converter[T]): Option[T] = {
+    localCache.get(key).flatMap(converter.to(_))
+      .orElse {
+        if (timeVersion == -1 || timeVersion < localCacheTrustTime) {
+          externalGet
+        } else {
+          None
+        }
       }
-    }
   }
 
   def put(key: Array[Byte], value: T): Unit = {
@@ -59,16 +64,17 @@ trait MappingCache[T <: CacheValue] {
   }
 }
 
-class MappingCacheImpl[T](val localCache: LocalCache, val localCacheTrustTime: Long, val localCacheExpirePeriod: Duration, val stripes: Int) extends MappingCache[T]
+class MappingCacheImpl[T <: CacheValue](val localCache: LocalCache, val localCacheTrustTime: Long, val localCacheExpirePeriod: Duration, val stripes: Int) extends MappingCache[T]
 
 object MappingCache {
-  def apply[T](localCache: LocalCache, localCacheTrustTime: Long, localCacheExpirePeriod: Duration, stripes: Int = 16): MappingCache[T] = new MappingCacheImpl(localCache, localCacheTrustTime, localCacheExpirePeriod, stripes)
+  def newCache[T <: CacheValue](localCache: LocalCache, localCacheTrustTime: Long, localCacheExpirePeriod: Duration, stripes: Int = 16): MappingCache[T] =
+    new MappingCacheImpl(localCache, localCacheTrustTime, localCacheExpirePeriod, stripes)
 
-  def apply[T](cacheName: String, localCacheTrustTime: Long, localCacheExpirePeriod: Duration, stripes: Int = 16): MappingCache[T] = {
-    val guavaCache: Cache[String, Array[Byte]] = new CacheBuilder[String, Array[Byte]]().maximumSize(1000).build[String, Array[Byte]]()
+  def apply[T <: CacheValue](cacheName: String, localCacheTrustTime: Long, localCacheExpirePeriod: Duration, stripes: Int = 16)(implicit center: TeleporterCenter): MappingCache[T] = {
+    val guavaCache: Cache[String, Array[Byte]] = CacheBuilder.newBuilder().maximumSize(1000).build[String, Array[Byte]]()
     val guavaLocalCache = GuavaLocalCache(guavaCache)
     val kvdbCache = KVDBCache("../../cache", "leveldb", "leveldb", cacheName, 7.days)
     val combineCache = CombineCache(Array(guavaLocalCache, kvdbCache))
-    MappingCache(combineCache, localCacheTrustTime, localCacheExpirePeriod, stripes)
+    newCache(combineCache, localCacheTrustTime, localCacheExpirePeriod, stripes)
   }
 }

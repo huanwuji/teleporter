@@ -5,7 +5,6 @@ import java.security.{KeyStore, SecureRandom}
 import javax.net.ssl.{KeyManagerFactory, SSLContext, TrustManagerFactory}
 
 import akka.NotUsed
-import akka.http.scaladsl.coding.Gzip
 import akka.stream.TLSProtocol._
 import akka.stream._
 import akka.stream.scaladsl.Tcp.IncomingConnection
@@ -15,13 +14,14 @@ import akka.util.ByteString
 import scala.concurrent.ExecutionContext
 
 /**
- * date 2015/8/3.
- * @author daikui
- */
+  * date 2015/8/3.
+  *
+  * @author daikui
+  */
 class TlsHelper
 
 object TlsHelper {
-  def defaultCipherSuites = NegotiateNewSession
+  def defaultCipherSuites: NegotiateNewSession = NegotiateNewSession
     .withCipherSuites("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_128_CBC_SHA")
     .withClientAuth(TLSClientAuth.need)
 
@@ -47,7 +47,7 @@ object TlsHelper {
     BidiFlow.fromFlows(
       Flow[ByteString].map(SendBytes),
       Flow[SslTlsInbound].map {
-        case SessionBytes(a, b) ⇒ b
+        case SessionBytes(_, b) ⇒ b
         case SessionTruncated ⇒ ByteString.empty
       })
 
@@ -60,11 +60,11 @@ object TlsHelper {
                (implicit ec: ExecutionContext, sslContext: SSLContext, newSession: NegotiateNewSession): Flow[ByteString, ByteString, NotUsed] =
     Framing.simpleFramingProtocol(10 * 1024 * 1024).atop(TlsHelper.sslTlsWrapper).join(tlsOutgoingFlow)
 
-  def gzipServerVia(connection: IncomingConnection, maximumMessageLength: Int, decodeParallelism: Int = 1)
+  def gzipServerVia(connection: IncomingConnection, maximumMessageLength: Int)
                    (implicit mater: Materializer, ec: ExecutionContext, sslContext: SSLContext, newSession: NegotiateNewSession): Flow[ByteString, ByteString, NotUsed] =
-    Flow[ByteString].map(Gzip.encode).via(serverVia(connection, maximumMessageLength)).mapAsyncUnordered(decodeParallelism)(Gzip.decode)
+    Flow[ByteString].via(Compression.gzip).via(serverVia(connection, maximumMessageLength)).via(Compression.gunzip())
 
-  def gzipClientVia(tlsOutgoingFlow: Flow[SslTlsOutbound, SslTlsInbound, NotUsed], maximumMessageLength: Int, decodeParallelism: Int = 1)
+  def gzipClientVia(tlsOutgoingFlow: Flow[SslTlsOutbound, SslTlsInbound, NotUsed], maximumMessageLength: Int)
                    (implicit mater: Materializer, ec: ExecutionContext, sslContext: SSLContext, newSession: NegotiateNewSession): Flow[ByteString, ByteString, NotUsed] =
-    Flow[ByteString].map(Gzip.encode).via(clientVia(tlsOutgoingFlow, maximumMessageLength)).mapAsyncUnordered(decodeParallelism)(Gzip.decode)
+    Flow[ByteString].via(Compression.gzip).via(clientVia(tlsOutgoingFlow, maximumMessageLength)).via(Compression.gunzip())
 }

@@ -78,8 +78,10 @@ export class SinkService extends ConfigService<Sink> {
         return this.getJDBCItems();
       case 'elasticsearch':
         return this.getElasticserach();
+      case 'kudu':
+        return this.getKuduItems();
       default:
-        return this.getKafkaItems();
+        throw new Error(`UnMatch sink category ${category}`)
     }
   }
 
@@ -88,7 +90,15 @@ export class SinkService extends ConfigService<Sink> {
   }
 
   private getElasticserach(): FormItemBase<any>[] {
-    return [];
+    return [
+      new TextboxFormItem({
+        key: 'parallelism',
+        label: 'parallelism',
+        type: 'number',
+        required: true,
+        value: 1
+      })
+    ];
   }
 
   private getJDBCItems(): FormItemBase<any>[] {
@@ -99,7 +109,24 @@ export class SinkService extends ConfigService<Sink> {
         type: 'number',
         required: true,
         value: 1
+      })
+    ];
+  }
+
+  private getKuduItems(): FormItemBase<any>[] {
+    return [
+      new TextboxFormItem({
+        key: 'kuduMaster',
+        label: 'kuduMaster',
+        required: true,
       }),
+      new TextboxFormItem({
+        key: 'workerCount',
+        label: 'workerCount',
+        type: 'number',
+        required: true,
+        value: 1
+      })
     ];
   }
 }

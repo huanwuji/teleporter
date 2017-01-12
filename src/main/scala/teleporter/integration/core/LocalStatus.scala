@@ -5,7 +5,7 @@ import java.nio.file.{Files, Paths}
 import akka.actor.{Actor, ActorRef}
 import akka.stream.scaladsl.{FileIO, Source}
 import akka.util.ByteString
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cache.{PersistentCacheInfo, PersistentCacheMonitor}
 import teleporter.integration.core.LocalStatus.{Sync, _}
 import teleporter.integration.utils.Jackson
@@ -18,7 +18,11 @@ import scala.concurrent.duration._
   */
 case class InstanceStatus(cachesInfo: Set[PersistentCacheInfo])
 
-class LocalStatusActor(statusPath: String) extends Actor with LazyLogging {
+class LocalStatusActor(statusPath: String)(implicit center: TeleporterCenter) extends Actor with Logging {
+
+  import center.materializer
+  import context.dispatcher
+
   var instanceStatus: InstanceStatus = _
 
   @scala.throws[Exception](classOf[Exception])

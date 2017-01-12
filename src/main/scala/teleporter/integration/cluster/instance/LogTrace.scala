@@ -3,17 +3,17 @@ package teleporter.integration.cluster.instance
 import java.nio.file.{Path, Paths}
 
 import akka.actor.{Actor, Cancellable}
-import akka.stream.scaladsl.{Framing, Sink, SinkQueueWithCancel, Source}
+import akka.stream.scaladsl.{Framing, Sink, SinkQueueWithCancel}
 import akka.util.ByteString
-import com.typesafe.scalalogging.LazyLogging
 import org.apache.logging.log4j.LogManager
 import org.apache.logging.log4j.core.LoggerContext
 import org.apache.logging.log4j.core.appender.RollingFileAppender
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.instance.LogTrace.{Check, Line, LogTailer}
-import teleporter.integration.cluster.rpc.proto.Rpc.{EventType, TeleporterEvent}
-import teleporter.integration.cluster.rpc.proto.instance.Instance.LogResponse
-import teleporter.integration.component.file.FileTailerPublisher
+import teleporter.integration.cluster.rpc.fbs.generate.EventType
+import teleporter.integration.cluster.rpc.{LogRequest, LogResponse, TeleporterEvent}
+import teleporter.integration.component.file.FileTailer
 import teleporter.integration.core.TeleporterCenter
 
 import scala.collection.JavaConverters._
@@ -23,7 +23,7 @@ import scala.concurrent.duration._
 /**
   * @author kui.dai Created 2016/9/1
   */
-class LogTrace()(implicit center: TeleporterCenter) extends Actor with LazyLogging {
+class LogTrace()(implicit center: TeleporterCenter) extends Actor with Logging {
 
   import center.materializer
   import context.dispatcher
@@ -31,28 +31,22 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with LazyLoggi
   var logTailer: LogTailer = _
   var checkSchedule: Cancellable = _
   var currTime: Long = System.currentTimeMillis()
-  val eventQueue: mutable.Queue[TeleporterEvent] = mutable.Queue[TeleporterEvent]()
+  val eventQueue: mutable.Queue[TeleporterEvent[LogRequest]] = mutable.Queue[TeleporterEvent[LogRequest]]()
   val logs: mutable.Queue[Line] = mutable.Queue[Line]()
 
   override def receive: Receive = {
-    case event: TeleporterEvent ⇒
+    case event: TeleporterEvent[LogRequest] ⇒
       currTime = System.currentTimeMillis()
-      event.getType match {
-        case EventType.LogRequest ⇒
-          if (logTailer == null) {
-            createLog4j2Tailer()
-          }
-          eventQueue += event
+      if (logTailer == null) {
+        createLog4j2Tailer()
       }
+      eventQueue += event
       delivery()
     case line@Line(s) ⇒
       if (eventQueue.isEmpty) {
         logs += line
       } else {
-        center.brokers ! SendMessage(TeleporterEvent.newBuilder(eventQueue.dequeue())
-          .setType(EventType.LogResponse)
-          .setBody(LogResponse.newBuilder().setLine(s).build().toByteString)
-          .build())
+        center.brokers ! SendMessage(TeleporterEvent(eventType = EventType.LogResponse, body = LogResponse(s)))
         if (eventQueue.nonEmpty) delivery()
       }
     case Check ⇒
@@ -75,7 +69,7 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with LazyLoggi
     val path = loggerContext.getConfiguration.getAppenders.asScala.collect {
       case (_, v: RollingFileAppender) ⇒ Paths.get(v.getFileName)
     }.head
-    val queue = Source.actorPublisher[ByteString](FileTailerPublisher.props(path))
+    val queue = FileTailer.source(path)
       .via(Framing.delimiter(ByteString.fromString("\n"), 1024 * 5))
       .runWith(Sink.queue())
     this.logTailer = LogTailer(path, queue)

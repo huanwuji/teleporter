@@ -5,21 +5,18 @@ import akka.actor.{Actor, ActorRef, Props, Status}
 import akka.dispatch.Futures
 import akka.pattern._
 import akka.util.Timeout
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
-import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys, Tables}
+import teleporter.integration.cluster.broker.PersistentProtocol.{AtomicKeyValue, KeyValue, Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.SendMessage
-import teleporter.integration.cluster.rpc.proto.Rpc._
-import teleporter.integration.cluster.rpc.proto.broker.Broker.{KVGet, RangeRegexKV}
-import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify
-import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify.Action
+import teleporter.integration.cluster.rpc.fbs.generate.{EventStatus, EventType, Role}
+import teleporter.integration.cluster.rpc.{ConfigChangeNotify, _}
 import teleporter.integration.core.TeleporterContext.Upsert
 import teleporter.integration.utils.{EventListener, MapBean, MapMetaBean}
 
 import scala.collection.JavaConverters._
 import scala.concurrent.Future
 import scala.concurrent.duration._
-import scala.language.implicitConversions
 
 /**
   * Author: kui.dai
@@ -139,15 +136,12 @@ class SinkMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
   def addressOption: Option[String] = this.get[String](FAddress)
 
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
-
-  def parallelism: Int = client.get[Int](FClientParallelism).getOrElse(0)
 }
 
 object SinkMetaBean {
   val FCategory = "category"
   val FAddress = "address"
   val FClient = "client"
-  val FClientParallelism = "parallelism"
 }
 
 class VariableMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean
@@ -176,14 +170,14 @@ object TeleporterConfigActor {
 
   case class LoadExtra(key: String, trigger: Boolean = true)
 
-  def apply(eventListener: EventListener[TeleporterEvent])
+  def apply(eventListener: EventListener[TeleporterEvent[Any]])
            (implicit center: TeleporterCenter): ActorRef = {
     center.system.actorOf(Props(classOf[TeleporterConfigActor], eventListener, center), "teleporter-config")
   }
 }
 
-class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
-                           (implicit center: TeleporterCenter) extends Actor with LazyLogging {
+class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[Any]])
+                           (implicit center: TeleporterCenter) extends Actor with Logging {
 
   import TeleporterConfigActor._
   import context.dispatcher
@@ -373,8 +367,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent])
     center.client.getConfig(key).map { kv ⇒
       val km = kv.metaBean[AddressMetaBean]
       val addressId = km.value.id
-      val share = km.value.share
-      val addressContext = AddressContext(id = addressId, key = km.key, config = km.value, linkKeys = Set.empty, clientRefs = ClientRefs(share))
+      val addressContext = AddressContext(id = addressId, key = km.key, config = km.value, linkKeys = Set.empty)
       center.context.ref ! Upsert(addressContext, trigger)
       addressContext
     }
@@ -399,39 +392,28 @@ trait TeleporterConfigClient {
   def getConfig(key: String): Future[KeyValue] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent.newBuilder()
-          .setRole(TeleporterEvent.Role.CLIENT)
-          .setType(EventType.KVGet)
-          .setSeqNr(seqNr)
-          .setBody(KVGet.newBuilder().setKey(key).build().toByteString).build()
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVGet, role = Role.CLIENT, body = KVGet(key))
       )
-    }._2.map(e ⇒ KV.parseFrom(e.getBody)).map(kv ⇒ KeyValue(kv.getKey, kv.getValue))
+    }._2.map(e ⇒ e.toBody[KeyValue])
   }
 
   def getRangeRegexConfig(key: String, start: Int = 0, limit: Int = Int.MaxValue): Future[Seq[KeyValue]] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent.newBuilder()
-          .setRole(TeleporterEvent.Role.CLIENT)
-          .setType(EventType.RangeRegexKV)
-          .setSeqNr(seqNr)
-          .setBody(RangeRegexKV.newBuilder().setKey(key).setStart(start).setLimit(limit).build().toByteString).build()
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.RangeRegexKV, role = Role.CLIENT,
+          body = RangeRegexKV(key = key, start = start, limit = limit))
       )
-    }._2.map(e ⇒ KVS.parseFrom(e.getBody).getKvsList.asScala)
-      .map(kvs ⇒ kvs.map(kv ⇒ KeyValue(kv.getKey, kv.getValue)))
+    }._2.map(e ⇒ e.toBody[KVS].kvs)
   }
 
   def save(key: String, value: String): Future[Done] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent.newBuilder()
-          .setRole(TeleporterEvent.Role.CLIENT)
-          .setType(EventType.KVSave)
-          .setSeqNr(seqNr)
-          .setBody(KV.newBuilder().setKey(key).setValue(value).build().toByteString).build()
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVSave, role = Role.CLIENT,
+          body = KeyValue(key = key, value = value))
       )
     }._2.map {
-      case e if e.getStatus == EventStatus.Success ⇒ Done
+      case e if e.status == EventStatus.Success ⇒ Done
       case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
     }
   }
@@ -439,14 +421,11 @@ trait TeleporterConfigClient {
   def atomicSave(key: String, expect: String, update: String): Future[Boolean] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent.newBuilder()
-          .setRole(TeleporterEvent.Role.CLIENT)
-          .setType(EventType.AtomicSaveKV)
-          .setSeqNr(seqNr)
-          .setBody(AtomicKV.newBuilder().setKey(key).setExpect(expect).setUpdate(update).build().toByteString).build()
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVSave, role = Role.CLIENT,
+          body = AtomicKeyValue(key = key, expect = expect, update = update))
       )
     }._2.map {
-      case e if e.getStatus == EventStatus.Success ⇒ true
+      case e if e.status == EventStatus.Success ⇒ true
       case _ ⇒ false
     }
   }
@@ -454,29 +433,23 @@ trait TeleporterConfigClient {
   def remove(key: String): Future[Done] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent.newBuilder()
-          .setRole(TeleporterEvent.Role.CLIENT)
-          .setType(EventType.KVRemove)
-          .setSeqNr(seqNr)
-          .setBody(KV.newBuilder().setKey(key).build().toByteString).build()
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVRemove, role = Role.CLIENT,
+          body = KVRemove(key = key))
       )
     }._2.map {
-      case e if e.getStatus == EventStatus.Success ⇒ Done
+      case e if e.status == EventStatus.Success ⇒ Done
       case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
     }
   }
 
-  def notify(key: String, action: Action): Future[Done] = {
+  def notify(key: String, action: Byte): Future[Done] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent.newBuilder()
-          .setRole(TeleporterEvent.Role.CLIENT)
-          .setType(EventType.ConfigChangeNotify)
-          .setSeqNr(seqNr)
-          .setBody(ConfigChangeNotify.newBuilder().setKey(key).build().toByteString).build()
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.CLIENT,
+          body = ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()))
       )
     }._2.map {
-      case e if e.getStatus == EventStatus.Success ⇒ Done
+      case e if e.status == EventStatus.Success ⇒ Done
       case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
     }
   }

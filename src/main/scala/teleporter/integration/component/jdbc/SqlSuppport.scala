@@ -75,7 +75,7 @@ trait SqlSupport extends Use {
 
   def nameColumnsSet(traversableOnce: TraversableOnce[String]): String = traversableOnce.map(col ⇒ s"$col=${paramsDefined(col)}").mkString(",")
 
-  def doAction(action: Action, ds: DataSource): Unit = action match {
+  def doAction(ds: DataSource, action: Action): Unit = action match {
     case Update(sql) ⇒ update(ds.getConnection, sql)
     case Upsert(up, sert) ⇒ if (update(ds.getConnection, up) == 0) update(ds.getConnection, sert)
   }

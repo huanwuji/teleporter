@@ -3,11 +3,9 @@ package teleporter.integration.protocol.fbs
 import java.nio.ByteBuffer
 import java.sql.{Date, Timestamp, Types}
 
-import akka.actor.ActorRef
 import com.google.flatbuffers.FlatBufferBuilder
-import teleporter.integration.component._
 import teleporter.integration.component.jdbc._
-import teleporter.integration.core.{TId, TeleporterMessage}
+import teleporter.integration.core.{TId, TransferMessage}
 import teleporter.integration.protocol.fbs.generate._
 
 /**
@@ -71,38 +69,7 @@ object FbsJdbcParam {
 object FbsJdbc {
   implicit def asPreparedSql(statement: JdbcStatement): PreparedSql = PreparedSql(statement.sql(), FbsJdbcParam.unapply(statement))
 
-  private def apply(builder: FlatBufferBuilder, sql: Sql): Int = {
-    val preparedSql = sql match {
-      case nameSql: NameSql ⇒ nameSql.toPreparedSql
-      case preparedSql: PreparedSql ⇒ preparedSql
-    }
-    val params = JdbcStatement.createParamsVector(builder, preparedSql.params.map(param ⇒ FbsJdbcParam(builder, param)).toArray)
-    JdbcStatement.createJdbcStatement(builder, builder.createString(preparedSql.sql), params)
-  }
-
-  def apply(record: TeleporterJdbcRecord, builder: FlatBufferBuilder): Int = {
-    val tId = JdbcMessage.createTidVector(builder, record.id.toBytes)
-    val jdbcActions = record.data.map {
-      case update: Update ⇒
-        val statements = JdbcAction.createStatementsVector(builder, Array(apply(builder, update.sql)))
-        JdbcAction.createJdbcAction(builder, ActionType.Update, statements)
-      case upsert: Upsert ⇒
-        val statements = JdbcAction.createStatementsVector(builder, Array(apply(builder, upsert.up), apply(builder, upsert.sert)))
-        JdbcAction.createJdbcAction(builder, ActionType.Upsert, statements)
-    }
-    val actions = JdbcMessage.createActionsVector(builder, jdbcActions.toArray)
-    JdbcMessage.createJdbcMessage(builder, tId, actions)
-  }
-
-  def apply(records: Seq[TeleporterJdbcRecord], initialCapacity: Int): FlatBufferBuilder = {
-    val builder = new FlatBufferBuilder(initialCapacity)
-    val messages = JdbcMessages.createMessagesVector(builder, records.map(apply(_, builder)).toArray)
-    val root = JdbcMessages.createJdbcMessages(builder, messages)
-    builder.finish(root)
-    builder
-  }
-
-  private def unapply(action: JdbcAction): Action = {
+  private def apply(action: JdbcAction): Action = {
     action.`type`() match {
       case ActionType.Update ⇒
         Update(action.statements(0))
@@ -111,19 +78,50 @@ object FbsJdbc {
     }
   }
 
-  def unapply(message: generate.JdbcMessage, sourceRef: ActorRef): TeleporterJdbcRecord = {
+  def apply(message: generate.JdbcMessage): TransferMessage[Seq[Action]] = {
     val tId = TId.keyFromBytes(Array.tabulate(message.tidLength())(message.tid))
-    val jdbcRecord = scala.collection.immutable.Seq.tabulate(message.actionsLength())(message.actions).map(unapply)
-    TeleporterMessage[JdbcRecord](id = tId, sourceRef = sourceRef, data = jdbcRecord)
+    val jdbcRecord = scala.collection.immutable.Seq.tabulate(message.actionsLength())(message.actions).map(apply)
+    TransferMessage[Seq[Action]](id = tId, data = jdbcRecord)
   }
 
-  def unapply(byteBuffer: ByteBuffer, sourceRef: ActorRef): scala.collection.immutable.Seq[TeleporterJdbcRecord] = {
+  def apply(byteBuffer: ByteBuffer): Seq[TransferMessage[Seq[Action]]] = {
     val messages = JdbcMessages.getRootAsJdbcMessages(byteBuffer)
-    scala.collection.immutable.Seq.tabulate(messages.messagesLength())(messages.messages).map(unapply(_, sourceRef))
+    scala.collection.immutable.Seq.tabulate(messages.messagesLength())(messages.messages).map(apply)
   }
 
-  def unapply(bytes: Array[Byte], sourceRef: ActorRef): scala.collection.immutable.Seq[TeleporterJdbcRecord] = {
+  def apply(bytes: Array[Byte]): Seq[TransferMessage[Seq[Action]]] = {
     val messages = JdbcMessages.getRootAsJdbcMessages(ByteBuffer.wrap(bytes))
-    scala.collection.immutable.Seq.tabulate(messages.messagesLength())(messages.messages).map(unapply(_, sourceRef))
+    scala.collection.immutable.Seq.tabulate(messages.messagesLength())(messages.messages).map(apply)
+  }
+
+  private def unapply(builder: FlatBufferBuilder, sql: Sql): Int = {
+    val preparedSql = sql match {
+      case nameSql: NameSql ⇒ nameSql.toPreparedSql
+      case preparedSql: PreparedSql ⇒ preparedSql
+    }
+    val params = JdbcStatement.createParamsVector(builder, preparedSql.params.map(param ⇒ FbsJdbcParam(builder, param)).toArray)
+    JdbcStatement.createJdbcStatement(builder, builder.createString(preparedSql.sql), params)
+  }
+
+  def unapply(record: TransferMessage[Seq[Action]], builder: FlatBufferBuilder): Int = {
+    val tId = JdbcMessage.createTidVector(builder, record.id.toBytes)
+    val jdbcActions = record.data.map {
+      case update: Update ⇒
+        val statements = JdbcAction.createStatementsVector(builder, Array(unapply(builder, update.sql)))
+        JdbcAction.createJdbcAction(builder, ActionType.Update, statements)
+      case upsert: Upsert ⇒
+        val statements = JdbcAction.createStatementsVector(builder, Array(unapply(builder, upsert.up), unapply(builder, upsert.sert)))
+        JdbcAction.createJdbcAction(builder, ActionType.Upsert, statements)
+    }
+    val actions = JdbcMessage.createActionsVector(builder, jdbcActions.toArray)
+    JdbcMessage.createJdbcMessage(builder, tId, actions)
+  }
+
+  def unapply(records: Seq[TransferMessage[Seq[Action]]], initialCapacity: Int): FlatBufferBuilder = {
+    val builder = new FlatBufferBuilder(initialCapacity)
+    val messages = JdbcMessages.createMessagesVector(builder, records.map(unapply(_, builder)).toArray)
+    val root = JdbcMessages.createJdbcMessages(builder, messages)
+    builder.finish(root)
+    builder
   }
 }

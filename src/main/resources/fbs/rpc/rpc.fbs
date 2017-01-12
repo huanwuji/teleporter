@@ -1,11 +1,53 @@
 namespace teleporter.integration.cluster.rpc.fbs.generate;
 
-table TeleporterRequest {
-    path:string;
+enum EventType:byte {
+    None = -1,
+    KVGet = 0,
+    RangeRegexKV = 1,
+    KVSave = 2,
+    AtomicSaveKV = 3,
+    KVRemove = 4,
+
+    LogRequest = 10,
+    LogResponse = 11,
+
+    LinkInstance = 20,
+    LinkAddress = 21,
+    LinkVariable = 22,
+    TaskState = 31,
+    BrokerState = 32,
+    InstanceState = 33,
+
+    ConfigChangeNotify = 40,
+}
+
+enum EventStatus:byte {
+    Failure,Success,None
+}
+
+enum Role:byte {
+    CLIENT, SERVER, None
+}
+
+table TeleporterEvent {
+    seqNr:long;
+    eventType:EventType;
+    role:Role;
+    status:EventStatus;
     body:[byte];
 }
 
-table TeleporterResponse {
-    path:string;
-    body:[byte];
+table KV {
+    key:string;
+    value:string;
+}
+
+table AtomicKV {
+    key:string;
+    expect:string;
+    update:string;
+}
+
+table KVS {
+    kvs:[KV];
 }

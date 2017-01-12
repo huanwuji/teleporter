@@ -1,7 +1,7 @@
 package teleporter.integration.cache
 
 import akka.actor.{Actor, Props}
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cache.KVDBCache.CacheType
 import teleporter.integration.cache.PersistentCacheMonitor.ClearExpired
 import teleporter.integration.component.kv.KVOperator
@@ -39,6 +39,7 @@ trait KVDBCache extends LocalCache {
               kVOperator.remove(key)
             }
         }
+      case _ ⇒
     }
   }
 
@@ -100,7 +101,7 @@ object PersistentCacheMonitor {
   def props(): Props = Props[PersistentCacheMonitorActor]
 }
 
-class PersistentCacheMonitorActor extends Actor with LazyLogging {
+class PersistentCacheMonitorActor extends Actor with Logging {
   override def receive: Receive = {
     case ClearExpired(cacheInfo) ⇒
       clearExpired(cacheInfo)

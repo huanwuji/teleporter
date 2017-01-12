@@ -1,5 +1,6 @@
 package kafka.javaapi.consumer
 
+import java.util
 import java.util.concurrent.atomic.AtomicBoolean
 
 import kafka.common.{MessageStreamsExistException, TopicAndPartition}
@@ -14,10 +15,7 @@ import scala.collection.mutable
   *
   * @author daikui
   */
-class ZkKafkaConsumerConnector(val config: ConsumerConfig,
-                               val enableFetcher: Boolean)
-  extends ConsumerConnector {
-
+class ZkKafkaConsumerConnector(val config: ConsumerConfig, val enableFetcher: Boolean) extends ConsumerConnector {
   private val underlying = new kafka.consumer.ZookeeperConsumerConnector(config, enableFetcher)
   private val messageStreamCreated = new AtomicBoolean(false)
 
@@ -48,14 +46,14 @@ class ZkKafkaConsumerConnector(val config: ConsumerConfig,
   def createMessageStreams(topicCountMap: java.util.Map[String, java.lang.Integer]): java.util.Map[String, java.util.List[KafkaStream[Array[Byte], Array[Byte]]]] =
     createMessageStreams(topicCountMap, new DefaultDecoder(), new DefaultDecoder())
 
-  def createMessageStreamsByFilter[K, V](topicFilter: TopicFilter, numStreams: Int, keyDecoder: Decoder[K], valueDecoder: Decoder[V]) = {
+  def createMessageStreamsByFilter[K, V](topicFilter: TopicFilter, numStreams: Int, keyDecoder: Decoder[K], valueDecoder: Decoder[V]): util.List[KafkaStream[K, V]] = {
     underlying.createMessageStreamsByFilter(topicFilter, numStreams, keyDecoder, valueDecoder).asJava
   }
 
-  def createMessageStreamsByFilter(topicFilter: TopicFilter, numStreams: Int) =
+  def createMessageStreamsByFilter(topicFilter: TopicFilter, numStreams: Int): util.List[KafkaStream[Array[Byte], Array[Byte]]] =
     createMessageStreamsByFilter(topicFilter, numStreams, new DefaultDecoder(), new DefaultDecoder())
 
-  def createMessageStreamsByFilter(topicFilter: TopicFilter) =
+  def createMessageStreamsByFilter(topicFilter: TopicFilter): util.List[KafkaStream[Array[Byte], Array[Byte]]] =
     createMessageStreamsByFilter(topicFilter, 1, new DefaultDecoder(), new DefaultDecoder())
 
   def commitOffsets() {

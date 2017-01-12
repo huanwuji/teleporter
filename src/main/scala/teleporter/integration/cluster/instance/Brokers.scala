@@ -11,16 +11,15 @@ import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.stream.scaladsl.{Flow, Framing, Keep, Sink, Source, Tcp}
 import akka.stream.{Attributes, OverflowStrategy}
 import akka.util.ByteString
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.broker.PersistentProtocol.Values.BrokerValue
 import teleporter.integration.cluster.broker.PersistentProtocol.{KeyBean, KeyValue, Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.{CreateConnection, _}
-import teleporter.integration.cluster.rpc.proto.Rpc.{EventType, TeleporterEvent}
-import teleporter.integration.cluster.rpc.proto.TeleporterRpc
-import teleporter.integration.cluster.rpc.proto.TeleporterRpc._
-import teleporter.integration.cluster.rpc.proto.broker.Broker.LinkInstance
-import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify
-import teleporter.integration.core.TeleporterConfigActor.{apply ⇒ _, _}
+import teleporter.integration.cluster.rpc.TeleporterEvent.EventHandle
+import teleporter.integration.cluster.rpc.fbs.generate.instance.Action
+import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
+import teleporter.integration.cluster.rpc.{ConfigChangeNotify, LinkInstance, TeleporterEvent}
+import teleporter.integration.core.TeleporterConfigActor._
 import teleporter.integration.core.TeleporterContext.Remove
 import teleporter.integration.core.{PartitionContext, TeleporterCenter}
 import teleporter.integration.utils.SimpleHttpClient
@@ -53,15 +52,15 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
     case CreateConnection(broker) ⇒
       logger.info(s"Create connection for $broker")
       val receiverRef = context.actorOf(Props(classOf[BrokerEventReceiverActor], center))
-      val (senderRef, fu) = Source.actorRef[TeleporterEvent](100, OverflowStrategy.fail)
+      val (senderRef, fu) = Source.actorRef[TeleporterEvent[Any]](100, OverflowStrategy.fail)
         .log("client-send")
         .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
-        .map(m ⇒ ByteString(m.toByteArray))
+        .map(e ⇒ ByteString(e.toArray))
         .watchTermination()(Keep.both)
         .merge(Source.tick(30.seconds, 30.seconds, ByteString()))
         .via(Framing.simpleFramingProtocol(10 * 1024 * 1024)
           .join(Tcp().outgoingConnection(remoteAddress = InetSocketAddress.createUnresolved(broker.value.ip, broker.value.tcpPort), connectTimeout = 2.minutes, idleTimeout = 2.minutes)))
-        .map(bs ⇒ TeleporterEvent.parseFrom(bs.toArray))
+        .map(TeleporterEvent(_))
         .log("client-receiver")
         .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
         .to(Sink.actorRef(receiverRef, Complete)).run()
@@ -78,19 +77,9 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
     case SelectOne ⇒
       mainBroker = brokerConnections.values.toSeq(Random.nextInt(brokerConnections.size))
       center.eventListener.asyncEvent { seqNr ⇒
-        mainBroker.senderRef ! TeleporterEvent.newBuilder()
-          .setSeqNr(seqNr)
-          .setRole(TeleporterEvent.Role.CLIENT)
-          .setType(EventType.LinkInstance)
-          .setBody(
-            LinkInstance.newBuilder()
-              .setInstance(center.instanceKey)
-              .setBroker(mainBroker.broker.key)
-              .setIp(InetAddress.getLocalHost.getHostAddress)
-              //              .setPort(center.port)
-              .setTimestamp(System.currentTimeMillis())
-              .build().toByteString
-          ).build()
+        mainBroker.senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkInstance, role = Role.CLIENT,
+          body = LinkInstance(instance = center.instanceKey, broker = mainBroker.broker.key,
+            ip = InetAddress.getLocalHost.getHostAddress, port = 9094, timestamp = System.currentTimeMillis()))
       }._2.onComplete {
         case Success(_) ⇒
           if (!connected.isCompleted) {
@@ -137,7 +126,7 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
   }
 }
 
-class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends Actor with LazyLogging {
+class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends Actor with Logging {
 
   var senderRef: ActorRef = _
   val logTrace: ActorRef = context.actorOf(Props(classOf[LogTrace], center))
@@ -147,24 +136,24 @@ class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends 
     case Complete ⇒ throw new RuntimeException("Error, Connection is forever!")
     case RegisterSender(ref) ⇒
       this.senderRef = ref
-    case event: TeleporterEvent ⇒
-      if (event.getRole == TeleporterEvent.Role.CLIENT) {
-        center.eventListener.resolve(event.getSeqNr, event)
+    case event: TeleporterEvent[Any] ⇒
+      if (event.role == Role.CLIENT) {
+        center.eventListener.resolve(event.seqNr, event)
       } else {
-        (eventHandle: EventHandle) ((event.getType, event))
+        (eventHandle: EventHandle) ((event.eventType, event))
       }
   }
 
   def eventHandle: EventHandle = {
     case (EventType.ConfigChangeNotify, event) ⇒
-      val notify = ConfigChangeNotify.parseFrom(event.getBody)
-      notify.getAction match {
-        case ConfigChangeNotify.Action.ADD ⇒ upsertChanged(notify)
-        case ConfigChangeNotify.Action.UPDATE ⇒ upsertChanged(notify)
-        case ConfigChangeNotify.Action.UPSERT ⇒ upsertChanged(notify)
-        case ConfigChangeNotify.Action.REMOVE ⇒ center.context.ref ! Remove(center.context.getContext(notify.getKey))
+      val notify = event.toBody[ConfigChangeNotify]
+      notify.action match {
+        case Action.ADD ⇒ upsertChanged(notify)
+        case Action.UPDATE ⇒ upsertChanged(notify)
+        case Action.UPSERT ⇒ upsertChanged(notify)
+        case Action.REMOVE ⇒ center.context.ref ! Remove(center.context.getContext(notify.key))
       }
-      senderRef ! TeleporterRpc.success(event)
+      senderRef ! TeleporterEvent.success(event)
     case (EventType.LogRequest, event) ⇒
       logTrace ! event
   }
@@ -174,7 +163,7 @@ class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends 
   }
 
   def upsertChanged(notify: ConfigChangeNotify): Unit = {
-    val key = notify.getKey
+    val key = notify.key
     val config = center.configRef
     Keys.table(key) match {
       case Tables.partition ⇒ config ! LoadPartition(key)
@@ -193,7 +182,7 @@ object Brokers {
 
   case object Complete
 
-  case class SendMessage(event: TeleporterEvent)
+  case class SendMessage[T](event: TeleporterEvent[T])
 
   case class LoaderBroker(brokers: String)
 

@@ -7,16 +7,15 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.http.scaladsl.server.Directives._
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
-import com.typesafe.scalalogging.LazyLogging
 import de.heikoseeberger.akkahttpjson4s.Json4sSupport._
+import org.apache.logging.log4j.scala.Logging
 import org.json4s.{DefaultFormats, native}
 import teleporter.integration.cluster.broker.ConfigNotify.{Remove, Upsert}
 import teleporter.integration.cluster.broker.PersistentProtocol.{AtomicKeyValue, KeyValue}
 import teleporter.integration.cluster.broker.PersistentService
 import teleporter.integration.cluster.broker.tcp.ConnectionKeeper
-import teleporter.integration.cluster.rpc.proto.Rpc.{EventType, TeleporterEvent}
-import teleporter.integration.cluster.rpc.proto.broker.Broker.LogRequest
-import teleporter.integration.cluster.rpc.proto.instance.Instance.LogResponse
+import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
+import teleporter.integration.cluster.rpc.{LogRequest, LogResponse, TeleporterEvent}
 import teleporter.integration.utils.EventListener
 
 import scala.collection.concurrent.TrieMap
@@ -25,13 +24,13 @@ import scala.util.{Failure, Success}
 /**
   * Created by kui.dai on 2016/7/15.
   */
-object HttpServer extends LazyLogging {
+object HttpServer extends Logging {
   def apply(host: String, port: Int,
             configNotify: ActorRef,
             configService: PersistentService,
             runtimeService: PersistentService,
             connectionKeepers: TrieMap[String, ConnectionKeeper],
-            eventListener: EventListener[TeleporterEvent])(implicit mater: ActorMaterializer): Unit = {
+            eventListener: EventListener[TeleporterEvent[Any]])(implicit mater: ActorMaterializer): Unit = {
     implicit val system = mater.system
     import system.dispatcher
     implicit val serialization = native.Serialization
@@ -84,19 +83,14 @@ object HttpServer extends LazyLogging {
                 case tm: TextMessage ⇒
                   val (_, fu) = eventListener.asyncEvent({ seqNr ⇒
                     tm.textStream.runForeach { txt ⇒
-                      keeper.senderRef ! TeleporterEvent.newBuilder()
-                        .setSeqNr(seqNr)
-                        .setRole(TeleporterEvent.Role.SERVER)
-                        .setType(EventType.LogRequest)
-                        .setBody(
-                          LogRequest.newBuilder().setCmd(txt).setRequest(1).build().toByteString
-                        ).build()
+                      keeper.senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.LogRequest, role = Role.SERVER,
+                        body = LogRequest(request = 1, cmd = txt))
                     }
-                  }, seqNr ⇒ Success(TeleporterEvent.newBuilder().setSeqNr(seqNr).build()))
+                  }, seqNr ⇒ Success(TeleporterEvent(seqNr = seqNr, eventType = EventType.LogResponse, body = -1)))
                   fu.onComplete {
                     case Success(event) ⇒
-                      val logResponse = LogResponse.parseFrom(event.getBody)
-                      sourceRef ! TextMessage(logResponse.getLine)
+                      val logResponse = event.toBody[LogResponse]
+                      sourceRef ! TextMessage(logResponse.line)
                     case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
                   }
                 case bm: BinaryMessage ⇒

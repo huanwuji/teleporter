@@ -1,8 +1,8 @@
 package teleporter.integration.metrics
 
 import akka.actor.Actor
-import com.typesafe.scalalogging.LazyLogging
-import teleporter.integration.component.{InfluxDto, InfluxdbClient}
+import org.apache.logging.log4j.scala.Logging
+import teleporter.integration.component.{InfluxDto, Influxdb, InfluxdbClient}
 import teleporter.integration.core.TeleporterCenter
 import teleporter.integration.metrics.InfluxdbReporter.Notify
 import teleporter.integration.metrics.Metrics.Measurement
@@ -20,13 +20,13 @@ object InfluxdbReporter {
 
 }
 
-class InfluxdbReporter(key: String, period: FiniteDuration)(implicit val center: TeleporterCenter) extends Actor with LazyLogging {
+class InfluxdbReporter(key: String, period: FiniteDuration)(implicit val center: TeleporterCenter) extends Actor with Logging {
 
   import MetricsImplicits._
   import center.materializer
   import context.dispatcher
 
-  val client: InfluxdbClient = center.components.address[InfluxdbClient](key)
+  val client: InfluxdbClient = Influxdb.address(key).client
 
   context.system.scheduler.schedule(period, period, self, Notify)
 

@@ -117,6 +117,7 @@ object PersistentProtocol {
     val SINK = "/sink/:ns/:task/:stream/:sink"
     val TASK_SINKS = "/sink/:ns/:task/"
     val STREAM_SINKS = "/sink/:ns/:task/:stream/"
+    val FLOW = "/:flow/:ns/:task/:stream/"
     val ADDRESS = "/address/:ns/:address"
     val VARIABLE = "/variable/:ns/:variable"
     //{keys:[], timestamp:194893439434}
@@ -154,6 +155,10 @@ object PersistentProtocol {
       template.split("/").zip(key.split("/")).filter(_._1.startsWith(":"))
         .map { case (v1, v2) ⇒ (v1.tail, v2) }.toMap
     }
+
+    def flowToStream(key: String): String = mapping(key, FLOW, STREAM)
+
+    def flowToTask(key: String): String = mapping(key, FLOW, TASK)
 
     def table(key: String): String = {
       unapply(key, "/:table")("table")

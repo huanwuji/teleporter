@@ -5,21 +5,18 @@ import akka.event.Logging
 import akka.stream.scaladsl.{Framing, Sink, Source, Tcp}
 import akka.stream.{ActorMaterializer, Attributes, OverflowStrategy}
 import akka.util.ByteString
-import com.typesafe.scalalogging.LazyLogging
+import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.broker.ConfigNotify.{Remove, Upsert}
-import teleporter.integration.cluster.broker.PersistentProtocol.Keys
-import teleporter.integration.cluster.broker.PersistentProtocol.Values.{toString ⇒ _, _}
+import teleporter.integration.cluster.broker.PersistentProtocol.Values._
+import teleporter.integration.cluster.broker.PersistentProtocol.{AtomicKeyValue, KeyValue, Keys}
 import teleporter.integration.cluster.broker.PersistentService
 import teleporter.integration.cluster.broker.tcp.EventReceiveActor._
-import teleporter.integration.cluster.rpc.proto.Rpc.{TeleporterEvent, _}
-import teleporter.integration.cluster.rpc.proto.TeleporterRpc
-import teleporter.integration.cluster.rpc.proto.TeleporterRpc.EventHandle
-import teleporter.integration.cluster.rpc.proto.broker.Broker._
-import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify
-import teleporter.integration.cluster.rpc.proto.instance.Instance.ConfigChangeNotify.Action
+import teleporter.integration.cluster.rpc.TeleporterEvent.EventHandle
+import teleporter.integration.cluster.rpc._
+import teleporter.integration.cluster.rpc.fbs.generate.instance.Action
+import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
 import teleporter.integration.utils.EventListener
 
-import scala.collection.JavaConverters._
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
 import scala.concurrent.Future
@@ -35,8 +32,8 @@ class EventReceiveActor(configService: PersistentService,
                         runtimeService: PersistentService,
                         configNotify: ActorRef,
                         connectionKeepers: TrieMap[String, ConnectionKeeper],
-                        eventListener: EventListener[TeleporterEvent])
-  extends Actor with LazyLogging {
+                        eventListener: EventListener[TeleporterEvent[Any]])
+  extends Actor with Logging {
 
   import context.dispatcher
   import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
@@ -56,15 +53,10 @@ class EventReceiveActor(configService: PersistentService,
     case StartPartition(partition, instance) ⇒
       logger.info(s"Assign $partition to $instance")
       runtimeService.put(partition, Version().toJson)
-      connectionKeepers.get(instance).foreach { keeper ⇒
+      connectionKeepers.get(instance).foreach { _ ⇒
         eventListener.asyncEvent { seqNr ⇒
-          senderRef ! TeleporterEvent.newBuilder()
-            .setSeqNr(seqNr)
-            .setRole(TeleporterEvent.Role.SERVER)
-            .setType(EventType.ConfigChangeNotify)
-            .setBody(
-              ConfigChangeNotify.newBuilder().setKey(partition).setAction(ConfigChangeNotify.Action.UPSERT).setTimestamp(System.currentTimeMillis()).build().toByteString
-            ).build()
+          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.SERVER,
+            body = ConfigChangeNotify(partition, Action.UPSERT, System.currentTimeMillis()))
         }._2.onComplete {
           case Success(_) ⇒
             runtimeService.put(Keys.mapping(partition, PARTITION, RUNTIME_PARTITION),
@@ -74,15 +66,10 @@ class EventReceiveActor(configService: PersistentService,
       }
     case StopPartition(partition, instance) ⇒
       runtimeService.delete(partition)
-      connectionKeepers.get(instance).foreach { keeper ⇒
+      connectionKeepers.get(instance).foreach { _ ⇒
         eventListener.asyncEvent { seqNr ⇒
-          senderRef ! TeleporterEvent.newBuilder()
-            .setSeqNr(seqNr)
-            .setRole(TeleporterEvent.Role.SERVER)
-            .setType(EventType.ConfigChangeNotify)
-            .setBody(
-              ConfigChangeNotify.newBuilder().setKey(partition).setAction(ConfigChangeNotify.Action.REMOVE).setTimestamp(System.currentTimeMillis()).build().toByteString
-            ).build()
+          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.SERVER,
+            body = ConfigChangeNotify(partition, Action.REMOVE, System.currentTimeMillis()))
         }._2.onComplete {
           case Success(_) ⇒ runtimeService.delete(Keys.mapping(partition, PARTITION, RUNTIME_PARTITION))
           case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
@@ -109,91 +96,84 @@ class EventReceiveActor(configService: PersistentService,
               }
         }
     case ReBalance(group, instance) ⇒ reBalance(group, instance)
-    case event: TeleporterEvent if event.getRole == TeleporterEvent.Role.SERVER ⇒
-      defaultEventHandle.apply((event.getType, event))
-    case event: TeleporterEvent if event.getRole == TeleporterEvent.Role.CLIENT ⇒
-      eventHandle.orElse(configEventHandle).orElse(defaultEventHandle).apply((event.getType, event))
+    case event: TeleporterEvent[Any] if event.role == Role.SERVER ⇒
+      defaultEventHandle.apply((event.eventType, event))
+    case event: TeleporterEvent[Any] if event.role == Role.CLIENT ⇒
+      eventHandle.orElse(configEventHandle).orElse(defaultEventHandle).apply((event.eventType, event))
   }
 
   def eventHandle: EventHandle = {
     case (EventType.LinkInstance, event) ⇒
-      val li = LinkInstance.parseFrom(event.getBody)
-      val instance = configService(li.getInstance()).keyBean[InstanceValue]
+      val li = event.toBody[LinkInstance]
+      val instance = configService(li.instance).keyBean[InstanceValue]
       this.currInstance = instance.key
       connectionKeepers += this.currInstance → ConnectionKeeper(senderRef, self)
       runtimeService.put(
-        key = Keys.mapping(li.getInstance(), INSTANCE, RUNTIME_INSTANCE),
+        key = Keys.mapping(li.instance, INSTANCE, RUNTIME_INSTANCE),
         value = RuntimeInstanceValue(
-          ip = li.getIp,
-          port = li.getPort,
+          ip = li.ip,
+          port = li.port,
           status = InstanceStatus.online,
-          broker = li.getBroker,
-          timestamp = li.getTimestamp).toJson
+          broker = li.broker,
+          timestamp = li.timestamp).toJson
       )
-      self ! ReBalance(instance.value.group, Some(li.getInstance()))
-      senderRef ! TeleporterRpc.success(event)
+      self ! ReBalance(instance.value.group, Some(li.instance))
+      senderRef ! TeleporterEvent.success(event)
     case (EventType.LinkAddress, event) ⇒
-      val ln = LinkAddress.parseFrom(event.getBody)
+      val ln = event.toBody[LinkAddress]
       runtimeService.put(
-        key = Keys(RUNTIME_ADDRESS, Keys.unapply(ln.getAddress, ADDRESS) ++ Keys.unapply(ln.getInstance(), INSTANCE)),
-        value = RuntimeAddressValue(keys = ln.getKeysList.asScala.toSet, timestamp = ln.getTimestamp).toJson
+        key = Keys(RUNTIME_ADDRESS, Keys.unapply(ln.address, ADDRESS) ++ Keys.unapply(ln.instance, INSTANCE)),
+        value = RuntimeAddressValue(keys = ln.keys.toSet, timestamp = ln.timestamp).toJson
       )
-      senderRef ! TeleporterRpc.success(event)
+      senderRef ! TeleporterEvent.success(event)
     case (EventType.LinkVariable, event) ⇒
-      val ln = LinkVariable.parseFrom(event.getBody)
+      val ln = event.toBody[LinkVariable]
       runtimeService.put(
-        key = Keys(RUNTIME_VARIABLE, Keys.unapply(ln.getVariableKey, VARIABLE) ++ Keys.unapply(ln.getInstance(), INSTANCE)),
-        value = RuntimeVariableValue(ln.getKeysList.asScala.toSet, timestamp = ln.getTimestamp).toJson
+        key = Keys(RUNTIME_VARIABLE, Keys.unapply(ln.variableKey, VARIABLE) ++ Keys.unapply(ln.instance, INSTANCE)),
+        value = RuntimeVariableValue(ln.keys.toSet, timestamp = ln.timestamp).toJson
       )
-      senderRef ! TeleporterRpc.success(event)
+      senderRef ! TeleporterEvent.success(event)
     case (EventType.LogResponse, event) ⇒
-      eventListener.resolve(event.getSeqNr, event)
+      eventListener.resolve(event.seqNr, event)
   }
 
   def configEventHandle: EventHandle = {
     case (EventType.KVGet, event) ⇒
-      val get = KVGet.parseFrom(event.getBody)
-      val kv = configService(get.getKey)
-      senderRef ! TeleporterEvent.newBuilder(event)
-        .setBody(KV.newBuilder().setKey(kv.key).setValue(kv.value).build().toByteString)
-        .build()
+      val get = event.toBody[KVGet]
+      val kv = configService(get.key)
+      senderRef ! event.copy(body = kv)
     case (EventType.RangeRegexKV, event) ⇒
-      val rangeKV = RangeRegexKV.parseFrom(event.getBody)
-      val kvs = configService.regexRange(rangeKV.getKey, rangeKV.getStart, rangeKV.getLimit)
-      senderRef ! TeleporterEvent.newBuilder(event)
-        .setBody(
-          KVS.newBuilder()
-            .addAllKvs(kvs.map(kv ⇒ KV.newBuilder().setKey(kv.key).setValue(kv.value).build()).asJava)
-            .build().toByteString
-        ).build()
+      val rangeKV = event.toBody[RangeRegexKV]
+      val kvs = configService.regexRange(rangeKV.key, rangeKV.start, rangeKV.limit)
+      senderRef ! event.copy(body = KVS(kvs.toArray))
     case (EventType.KVSave, event) ⇒
-      val kv = KV.parseFrom(event.getBody)
-      configService.put(key = kv.getKey, value = kv.getValue)
-      senderRef ! TeleporterRpc.success(event)
+      val kv = event.toBody[KeyValue]
+      configService.put(key = kv.key, value = kv.value)
+      senderRef ! TeleporterEvent.success(event)
     case (EventType.KVRemove, event) ⇒
-      val remove = KVRemove.parseFrom(event.getBody)
-      configService.delete(key = remove.getKey)
-      senderRef ! TeleporterRpc.success(event)
+      val remove = event.toBody[KVRemove]
+      configService.delete(key = remove.key)
+      senderRef ! TeleporterEvent.success(event)
     case (EventType.AtomicSaveKV, event) ⇒
-      val atomicSave = AtomicKV.parseFrom(event.getBody)
-      if (configService.atomicPut(atomicSave.getKey, atomicSave.getExpect, atomicSave.getUpdate)) {
-        senderRef ! TeleporterRpc.success(event)
+      val atomicSave = event.toBody[AtomicKeyValue]
+      if (configService.atomicPut(atomicSave.key, atomicSave.expect, atomicSave.update)) {
+        senderRef ! TeleporterEvent.success(event)
       } else {
-        senderRef ! TeleporterRpc.failure(event)
+        senderRef ! TeleporterEvent.failure(event)
       }
     case (EventType.ConfigChangeNotify, event) ⇒
-      val notify = ConfigChangeNotify.parseFrom(event.getBody)
-      notify.getAction match {
-        case Action.ADD | Action.UPDATE | Action.UPSERT ⇒ Upsert(notify.getKey)
-        case Action.REMOVE ⇒ configNotify ! Remove(notify.getKey)
+      val notify = event.toBody[ConfigChangeNotify]
+      notify.action match {
+        case Action.ADD | Action.UPDATE | Action.UPSERT ⇒ Upsert(notify.key)
+        case Action.REMOVE ⇒ configNotify ! Remove(notify.key)
       }
-      senderRef ! TeleporterRpc.success(event)
+      senderRef ! TeleporterEvent.success(event)
   }
 
   def defaultEventHandle: EventHandle = {
     case (_, event) ⇒
-      if (event.getRole == TeleporterEvent.Role.SERVER) {
-        eventListener.resolve(event.getSeqNr, event)
+      if (event.role == Role.SERVER) {
+        eventListener.resolve(event.seqNr, event)
       } else {
         logger.warn(event.toString)
       }
@@ -270,13 +250,13 @@ object EventReceiveActor {
 
 }
 
-object RpcServer extends LazyLogging {
+object RpcServer extends Logging {
   def apply(host: String, port: Int,
             configService: PersistentService,
             runtimeService: PersistentService,
             configNotify: ActorRef,
             connectionKeepers: TrieMap[String, ConnectionKeeper],
-            eventListener: EventListener[TeleporterEvent])(implicit mater: ActorMaterializer): Future[Tcp.ServerBinding] = {
+            eventListener: EventListener[TeleporterEvent[Any]])(implicit mater: ActorMaterializer): Future[Tcp.ServerBinding] = {
     implicit val system = mater.system
     import system.dispatcher
     Tcp().bind(host, port, idleTimeout = 2.minutes).to(Sink.foreach {
@@ -284,14 +264,14 @@ object RpcServer extends LazyLogging {
         logger.info(s"New connection from: ${connection.remoteAddress}")
         val eventReceiver = system.actorOf(Props(classOf[EventReceiveActor], configService, runtimeService, configNotify, connectionKeepers, eventListener))
         try {
-          Source.actorRef[TeleporterEvent](1000, OverflowStrategy.fail)
+          Source.actorRef[TeleporterEvent[Any]](1000, OverflowStrategy.fail)
             .log("server-response")
             .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
-            .map(m ⇒ ByteString(m.toByteArray))
+            .map(m ⇒ ByteString(TeleporterEvent.toFlat(m).sizedByteArray()))
             .watchTermination() { case (ref, fu) ⇒ eventReceiver ! RegisterSender(ref); fu }
             .via(Framing.simpleFramingProtocol(10 * 1024 * 1024).join(connection.flow))
             .filter(_.nonEmpty)
-            .map(bs ⇒ TeleporterEvent.parseFrom(bs.toArray))
+            .map(TeleporterEvent(_))
             .log("server-receiver")
             .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
             .to(Sink.actorRef(eventReceiver, Complete)).run().onComplete {

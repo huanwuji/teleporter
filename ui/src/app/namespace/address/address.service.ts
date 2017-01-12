@@ -2,13 +2,7 @@ import {Injectable} from "@angular/core";
 import {Http} from "@angular/http";
 import "rxjs/add/operator/toPromise";
 import {ConfigService, RuntimeService, KeyBean, Identity} from "../../rest.servcie";
-import {
-  FormItemBase,
-  TextboxFormItem,
-  DynamicGroupFormItem,
-  GroupFormItem,
-  CheckboxFormItem
-} from "../../dynamic/form/form-item";
+import {FormItemBase, TextboxFormItem, DynamicGroupFormItem, GroupFormItem} from "../../dynamic/form/form-item";
 
 export interface Address extends Identity {
   ns?: string;
@@ -49,13 +43,6 @@ export class AddressService extends ConfigService<Address> {
         key: 'name',
         label: 'name',
         required: true
-      }),
-      new CheckboxFormItem({
-        key: 'share',
-        label: 'share',
-        required: true,
-        placeholder: 'true|false',
-        value: false
       }),
       new GroupFormItem({
         key: 'client',
