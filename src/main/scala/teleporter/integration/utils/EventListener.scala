@@ -17,7 +17,7 @@ trait EventListener[T] {
   val system: ActorSystem
   type ErrorHandler = Long ⇒ Try[T]
 
-  def timeoutHandler(seqNr: Long): Try[T] = Failure(new TimeoutException(s"Event response timeout $seqNr"))
+  def timeoutHandler(seqNr: Long): Try[T] = Failure(new TimeoutException(s"Event response timeout, seqNr: $seqNr"))
 
   import system.dispatcher
 

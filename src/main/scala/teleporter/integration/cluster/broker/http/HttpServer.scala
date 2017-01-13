@@ -14,8 +14,9 @@ import teleporter.integration.cluster.broker.ConfigNotify.{Remove, Upsert}
 import teleporter.integration.cluster.broker.PersistentProtocol.{AtomicKeyValue, KeyValue}
 import teleporter.integration.cluster.broker.PersistentService
 import teleporter.integration.cluster.broker.tcp.ConnectionKeeper
-import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
-import teleporter.integration.cluster.rpc.{LogRequest, LogResponse, TeleporterEvent}
+import teleporter.integration.cluster.rpc.EventBody.LogTailRequest
+import teleporter.integration.cluster.rpc.fbs.{EventStatus, EventType, Role}
+import teleporter.integration.cluster.rpc.{EventBody, TeleporterEvent}
 import teleporter.integration.utils.EventListener
 
 import scala.collection.concurrent.TrieMap
@@ -30,7 +31,7 @@ object HttpServer extends Logging {
             configService: PersistentService,
             runtimeService: PersistentService,
             connectionKeepers: TrieMap[String, ConnectionKeeper],
-            eventListener: EventListener[TeleporterEvent[Any]])(implicit mater: ActorMaterializer): Unit = {
+            eventListener: EventListener[TeleporterEvent[_ <: EventBody]])(implicit mater: ActorMaterializer): Unit = {
     implicit val system = mater.system
     import system.dispatcher
     implicit val serialization = native.Serialization
@@ -83,13 +84,17 @@ object HttpServer extends Logging {
                 case tm: TextMessage ⇒
                   val (_, fu) = eventListener.asyncEvent({ seqNr ⇒
                     tm.textStream.runForeach { txt ⇒
-                      keeper.senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.LogRequest, role = Role.SERVER,
-                        body = LogRequest(request = 1, cmd = txt))
+                      keeper.senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.LogTail, role = Role.Request,
+                        body = LogTailRequest(request = 1, cmd = txt))
                     }
-                  }, seqNr ⇒ Success(TeleporterEvent(seqNr = seqNr, eventType = EventType.LogResponse, body = -1)))
+                  }, seqNr ⇒ Success(TeleporterEvent(seqNr = seqNr,
+                    eventType = EventType.LogTail,
+                    status = EventStatus.Failure,
+                    role = Role.Response,
+                    body = EventBody.Empty.empty)))
                   fu.onComplete {
                     case Success(event) ⇒
-                      val logResponse = event.toBody[LogResponse]
+                      val logResponse = event.toBody[EventBody.LogTailResponse]
                       sourceRef ! TextMessage(logResponse.line)
                     case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
                   }

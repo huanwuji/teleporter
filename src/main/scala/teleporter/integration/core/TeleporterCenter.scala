@@ -14,7 +14,7 @@ import com.typesafe.config.{Config, ConfigFactory}
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.ActorTestMessages.Ping
 import teleporter.integration.cluster.instance.Brokers
-import teleporter.integration.cluster.rpc.TeleporterEvent
+import teleporter.integration.cluster.rpc.{EventBody, TeleporterEvent}
 import teleporter.integration.component.GitClient
 import teleporter.integration.component.kv.KVOperator
 import teleporter.integration.component.kv.leveldb.{LevelDBs, LevelTable}
@@ -55,7 +55,7 @@ trait TeleporterCenter extends Logging {
 
   def defaultSourceCheckPoint: CheckPoint[MapBean]
 
-  def eventListener: EventListener[TeleporterEvent[Any]]
+  def eventListener: EventListener[TeleporterEvent[_ <: EventBody]]
 
   def client: TeleporterConfigClient
 
@@ -81,7 +81,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
   var _configRef: ActorRef = _
   var _defaultRecoveryPoint: CheckPoint[MapBean] = _
   var _metricRegistry: MetricRegistry = _
-  val _eventListener: EventListener[TeleporterEvent[Any]] = EventListener[TeleporterEvent[Any]]()
+  val _eventListener: EventListener[TeleporterEvent[_ <: EventBody]] = EventListener[TeleporterEvent[_ <: EventBody]]()
   val _teleporterConfigClient = TeleporterConfigClient()
   var _localStatusRef: ActorRef = _
 
@@ -91,7 +91,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
     _configRef = TeleporterConfigActor(_eventListener)
     _defaultRecoveryPoint = CheckPoint.sourceCheckPoint()
     _metricRegistry = MetricRegistry()
-    _localStatusRef = system.actorOf(Props(classOf[LocalStatusActor], config.getString("status-path"), this))
+    _localStatusRef = system.actorOf(Props(classOf[LocalStatusActor], config.getString("status-file"), this))
     val (brokerRef, connected) = Brokers(seedBrokers)
     _brokers = brokerRef
     connected.map {
@@ -124,7 +124,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
 
   override def defaultSourceCheckPoint: CheckPoint[MapBean] = _defaultRecoveryPoint
 
-  override def eventListener: EventListener[TeleporterEvent[Any]] = _eventListener
+  override def eventListener: EventListener[TeleporterEvent[_ <: EventBody]] = _eventListener
 
   override def client: TeleporterConfigClient = _teleporterConfigClient
 
@@ -147,6 +147,6 @@ object TeleporterCenter extends Logging {
       case "leveldb" ⇒ LevelTable(LevelDBs("teleporter", localStorageConfig.getString("path")), "localStorage")
       case "rocksdb" ⇒ RocksTable(RocksDBs("teleporter", localStorageConfig.getString("path")), "localStorage")
     }
-    new TeleporterCenterImpl(instanceKey, seedBrokers, config, localStorage)
+    new TeleporterCenterImpl(instanceKey, seedBrokers, instanceConfig, localStorage)
   }
 }

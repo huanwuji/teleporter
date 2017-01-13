@@ -1,14 +1,16 @@
 package teleporter.integration.supervision
 
+import akka.actor.ActorRef
 import akka.stream.TeleporterAttribute
 import akka.stream.TeleporterAttribute.{SupervisionStrategy, TeleporterSupervisionStrategy}
 import org.apache.logging.log4j.scala.Logging
+import teleporter.integration.core.Streams.DelayCommand
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics.{Measurement, Tag, Tags}
 import teleporter.integration.supervision.Decider.Decide
 import teleporter.integration.supervision.Supervision._
 
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{Duration, FiniteDuration, _}
 import scala.util.matching.Regex
 
 /**
@@ -101,18 +103,46 @@ trait Decider {
   protected def decide: Decide
 }
 
-trait StreamDecider extends Decider {
+class StreamDecider(key: String, streamRef: ActorRef, val supervisionStrategy: SupervisionStrategy)(implicit center: TeleporterCenter) extends Decider {
+  var retries = 0
+  var lastExecuteTime: Long = System.currentTimeMillis()
+
+  override def teleporterFailure(ex: Throwable): Unit = {
+    lastExecuteTime = System.currentTimeMillis()
+    if (System.currentTimeMillis() - lastExecuteTime > 5.minutes.toMillis) {
+      retries = 0
+    }
+    retries += 1
+    matchRule(ex).foreach {
+      rule ⇒
+        if (retries < rule.directive.retries) {
+          rule.directive.delay match {
+            case Duration.Zero ⇒ decide(ex, rule.directive)
+            case d: FiniteDuration ⇒
+              rule.directive match {
+                case _: Start ⇒ streamRef ! DelayCommand(Streams.Start(key), d)
+                case _: Stop ⇒ streamRef ! DelayCommand(Streams.Stop(key), d)
+                case _: Restart ⇒ streamRef ! DelayCommand(Streams.Restart(key), d)
+              }
+            case _ ⇒
+          }
+        } else {
+          rule.directive.next.foreach(decide(ex, _))
+        }
+    }
+  }
+
   override def decide: Decide = {
     case (ex, _: Start) ⇒ start(ex)
     case (ex, _: Stop) ⇒ stop(ex)
     case (ex, _: Restart) ⇒ restart(ex)
   }
 
-  def start(ex: Throwable): Unit
+  def start(ex: Throwable): Unit = center.streams ! Streams.Start(key)
 
-  def stop(ex: Throwable): Unit
+  def stop(ex: Throwable): Unit = center.streams ! Streams.Stop(key)
 
-  def restart(ex: Throwable): Unit
+  def restart(ex: Throwable): Unit = center.streams ! Streams.Restart(key)
 }
 
 trait SourceDecider extends Decider {
@@ -164,7 +194,7 @@ object DecideRule {
     * regex: handler
     * Unknown column: stop
     */
-  def apply(key: String, config: ConfigMetaBean)(implicit center: TeleporterCenter): Seq[DecideRule] = {
+  def apply(config: ConfigMetaBean)(implicit center: TeleporterCenter): Seq[DecideRule] = {
     config.errorRules.map {
       case ruleMatch(errorMatch, _, level, directive) ⇒ DecideRule(errorMatch, level, directive)
     }

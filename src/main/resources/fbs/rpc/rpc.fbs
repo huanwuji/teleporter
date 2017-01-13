@@ -1,4 +1,4 @@
-namespace teleporter.integration.cluster.rpc.fbs.generate;
+namespace teleporter.integration.cluster.rpc.fbs;
 
 enum EventType:byte {
     None = -1,
@@ -8,8 +8,7 @@ enum EventType:byte {
     AtomicSaveKV = 3,
     KVRemove = 4,
 
-    LogRequest = 10,
-    LogResponse = 11,
+    LogTail = 10,
 
     LinkInstance = 20,
     LinkAddress = 21,
@@ -22,14 +21,14 @@ enum EventType:byte {
 }
 
 enum EventStatus:byte {
-    Failure,Success,None
+    Failure, Success, None
 }
 
 enum Role:byte {
-    CLIENT, SERVER, None
+    Request, Response
 }
 
-table TeleporterEvent {
+table RpcEvent {
     seqNr:long;
     eventType:EventType;
     role:Role;
@@ -50,4 +49,90 @@ table AtomicKV {
 
 table KVS {
     kvs:[KV];
+}
+
+table Partition {
+    key:string;
+    bootKeys:[string];
+}
+
+table LinkAddress {
+    address:string;
+    instance:string;
+    keys:[string];
+    timestamp:long;
+}
+
+table LinkVariable {
+    variableKey:string;
+    instance:string;
+    keys:[string];
+    timestamp:long;
+}
+
+table LinkInstance {
+    instance:string;
+    broker:string;
+    ip:string;
+    port:int;
+    timestamp:long;
+}
+
+table TaskState {
+    task:string;
+    broker:string;
+    timestamp:long;
+}
+
+table BrokerState {
+    broker:string;
+    task:string;
+    timestamp:long;
+}
+
+table InstanceState {
+    instance:string;
+    broker:string;
+    ip:string;
+    port:int;
+    partitions:[string];
+    timestamp:long;
+}
+
+table KVGet {
+    key:string;
+}
+
+table KVRemove {
+    key:string;
+}
+
+table RangeRegexKV {
+    key:string;
+    start:int;
+    limit:int;
+}
+
+enum Action:byte {
+    ADD, UPDATE, UPSERT, REMOVE
+}
+
+table ConfigChangeNotify {
+    key:string;
+    action:Action;
+    timestamp:long;
+}
+
+table HealthResponse {
+    totalMemory:float;
+    freeMemory:float;
+}
+
+table LogTailRequest {
+    request:int;
+    cmd:string;
+}
+
+table LogTailResponse {
+    line:string;
 }

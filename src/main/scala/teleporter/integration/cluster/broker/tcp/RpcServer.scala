@@ -7,14 +7,14 @@ import akka.stream.{ActorMaterializer, Attributes, OverflowStrategy}
 import akka.util.ByteString
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.broker.ConfigNotify.{Remove, Upsert}
+import teleporter.integration.cluster.broker.PersistentProtocol.Keys
 import teleporter.integration.cluster.broker.PersistentProtocol.Values._
-import teleporter.integration.cluster.broker.PersistentProtocol.{AtomicKeyValue, KeyValue, Keys}
 import teleporter.integration.cluster.broker.PersistentService
 import teleporter.integration.cluster.broker.tcp.EventReceiveActor._
+import teleporter.integration.cluster.rpc.EventBody.ConfigChangeNotify
 import teleporter.integration.cluster.rpc.TeleporterEvent.EventHandle
 import teleporter.integration.cluster.rpc._
-import teleporter.integration.cluster.rpc.fbs.generate.instance.Action
-import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
+import teleporter.integration.cluster.rpc.fbs.{Action, EventType, Role}
 import teleporter.integration.utils.EventListener
 
 import scala.collection.concurrent.TrieMap
@@ -32,7 +32,7 @@ class EventReceiveActor(configService: PersistentService,
                         runtimeService: PersistentService,
                         configNotify: ActorRef,
                         connectionKeepers: TrieMap[String, ConnectionKeeper],
-                        eventListener: EventListener[TeleporterEvent[Any]])
+                        eventListener: EventListener[TeleporterEvent[_ <: EventBody]])
   extends Actor with Logging {
 
   import context.dispatcher
@@ -55,7 +55,7 @@ class EventReceiveActor(configService: PersistentService,
       runtimeService.put(partition, Version().toJson)
       connectionKeepers.get(instance).foreach { _ ⇒
         eventListener.asyncEvent { seqNr ⇒
-          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.SERVER,
+          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.Request,
             body = ConfigChangeNotify(partition, Action.UPSERT, System.currentTimeMillis()))
         }._2.onComplete {
           case Success(_) ⇒
@@ -68,7 +68,7 @@ class EventReceiveActor(configService: PersistentService,
       runtimeService.delete(partition)
       connectionKeepers.get(instance).foreach { _ ⇒
         eventListener.asyncEvent { seqNr ⇒
-          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.SERVER,
+          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.Request,
             body = ConfigChangeNotify(partition, Action.REMOVE, System.currentTimeMillis()))
         }._2.onComplete {
           case Success(_) ⇒ runtimeService.delete(Keys.mapping(partition, PARTITION, RUNTIME_PARTITION))
@@ -96,15 +96,15 @@ class EventReceiveActor(configService: PersistentService,
               }
         }
     case ReBalance(group, instance) ⇒ reBalance(group, instance)
-    case event: TeleporterEvent[Any] if event.role == Role.SERVER ⇒
-      defaultEventHandle.apply((event.eventType, event))
-    case event: TeleporterEvent[Any] if event.role == Role.CLIENT ⇒
-      eventHandle.orElse(configEventHandle).orElse(defaultEventHandle).apply((event.eventType, event))
+    case event: TeleporterEvent[_] if event.role == Role.Request ⇒
+      eventHandle.orElse(configEventHandle).apply((event.eventType, event))
+    case event: TeleporterEvent[_] if event.role == Role.Response ⇒
+      eventListener.resolve(event.seqNr, event)
   }
 
   def eventHandle: EventHandle = {
     case (EventType.LinkInstance, event) ⇒
-      val li = event.toBody[LinkInstance]
+      val li = event.toBody[EventBody.LinkInstance]
       val instance = configService(li.instance).keyBean[InstanceValue]
       this.currInstance = instance.key
       connectionKeepers += this.currInstance → ConnectionKeeper(senderRef, self)
@@ -120,42 +120,42 @@ class EventReceiveActor(configService: PersistentService,
       self ! ReBalance(instance.value.group, Some(li.instance))
       senderRef ! TeleporterEvent.success(event)
     case (EventType.LinkAddress, event) ⇒
-      val ln = event.toBody[LinkAddress]
+      val ln = event.toBody[EventBody.LinkAddress]
       runtimeService.put(
         key = Keys(RUNTIME_ADDRESS, Keys.unapply(ln.address, ADDRESS) ++ Keys.unapply(ln.instance, INSTANCE)),
         value = RuntimeAddressValue(keys = ln.keys.toSet, timestamp = ln.timestamp).toJson
       )
       senderRef ! TeleporterEvent.success(event)
     case (EventType.LinkVariable, event) ⇒
-      val ln = event.toBody[LinkVariable]
+      val ln = event.toBody[EventBody.LinkVariable]
       runtimeService.put(
         key = Keys(RUNTIME_VARIABLE, Keys.unapply(ln.variableKey, VARIABLE) ++ Keys.unapply(ln.instance, INSTANCE)),
         value = RuntimeVariableValue(ln.keys.toSet, timestamp = ln.timestamp).toJson
       )
       senderRef ! TeleporterEvent.success(event)
-    case (EventType.LogResponse, event) ⇒
+    case (EventType.LogTail, event) ⇒
       eventListener.resolve(event.seqNr, event)
   }
 
   def configEventHandle: EventHandle = {
     case (EventType.KVGet, event) ⇒
-      val get = event.toBody[KVGet]
+      val get = event.toBody[EventBody.KVGet]
       val kv = configService(get.key)
-      senderRef ! event.copy(body = kv)
+      senderRef ! event.copy(role = Role.Response, body = EventBody.KV(kv.key, kv.value))
     case (EventType.RangeRegexKV, event) ⇒
-      val rangeKV = event.toBody[RangeRegexKV]
+      val rangeKV = event.toBody[EventBody.RangeRegexKV]
       val kvs = configService.regexRange(rangeKV.key, rangeKV.start, rangeKV.limit)
-      senderRef ! event.copy(body = KVS(kvs.toArray))
+      senderRef ! event.copy(role = Role.Response, body = EventBody.KVS(kvs.map(kv ⇒ EventBody.KV(kv.key, kv.value))))
     case (EventType.KVSave, event) ⇒
-      val kv = event.toBody[KeyValue]
+      val kv = event.toBody[EventBody.KV]
       configService.put(key = kv.key, value = kv.value)
       senderRef ! TeleporterEvent.success(event)
     case (EventType.KVRemove, event) ⇒
-      val remove = event.toBody[KVRemove]
+      val remove = event.toBody[EventBody.KVRemove]
       configService.delete(key = remove.key)
       senderRef ! TeleporterEvent.success(event)
     case (EventType.AtomicSaveKV, event) ⇒
-      val atomicSave = event.toBody[AtomicKeyValue]
+      val atomicSave = event.toBody[EventBody.AtomicKV]
       if (configService.atomicPut(atomicSave.key, atomicSave.expect, atomicSave.update)) {
         senderRef ! TeleporterEvent.success(event)
       } else {
@@ -168,15 +168,6 @@ class EventReceiveActor(configService: PersistentService,
         case Action.REMOVE ⇒ configNotify ! Remove(notify.key)
       }
       senderRef ! TeleporterEvent.success(event)
-  }
-
-  def defaultEventHandle: EventHandle = {
-    case (_, event) ⇒
-      if (event.role == Role.SERVER) {
-        eventListener.resolve(event.seqNr, event)
-      } else {
-        logger.warn(event.toString)
-      }
   }
 
   def reBalance(groupKey: String, currInstance: Option[String] = None): Unit = {
@@ -256,7 +247,7 @@ object RpcServer extends Logging {
             runtimeService: PersistentService,
             configNotify: ActorRef,
             connectionKeepers: TrieMap[String, ConnectionKeeper],
-            eventListener: EventListener[TeleporterEvent[Any]])(implicit mater: ActorMaterializer): Future[Tcp.ServerBinding] = {
+            eventListener: EventListener[TeleporterEvent[_ <: EventBody]])(implicit mater: ActorMaterializer): Future[Tcp.ServerBinding] = {
     implicit val system = mater.system
     import system.dispatcher
     Tcp().bind(host, port, idleTimeout = 2.minutes).to(Sink.foreach {
@@ -264,10 +255,10 @@ object RpcServer extends Logging {
         logger.info(s"New connection from: ${connection.remoteAddress}")
         val eventReceiver = system.actorOf(Props(classOf[EventReceiveActor], configService, runtimeService, configNotify, connectionKeepers, eventListener))
         try {
-          Source.actorRef[TeleporterEvent[Any]](1000, OverflowStrategy.fail)
+          Source.actorRef[TeleporterEvent[_ <: EventBody]](1000, OverflowStrategy.fail)
             .log("server-response")
             .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
-            .map(m ⇒ ByteString(TeleporterEvent.toFlat(m).sizedByteArray()))
+            .map(event ⇒ ByteString(TeleporterEvent.toArray(event)))
             .watchTermination() { case (ref, fu) ⇒ eventReceiver ! RegisterSender(ref); fu }
             .via(Framing.simpleFramingProtocol(10 * 1024 * 1024).join(connection.flow))
             .filter(_.nonEmpty)

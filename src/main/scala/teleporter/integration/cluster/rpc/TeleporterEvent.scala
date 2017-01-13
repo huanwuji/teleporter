@@ -1,145 +1,221 @@
 package teleporter.integration.cluster.rpc
 
-import java.nio.ByteBuffer
-
 import akka.util.ByteString
 import com.google.flatbuffers.FlatBufferBuilder
-import teleporter.integration.cluster.broker.PersistentProtocol.{AtomicKeyValue, KeyValue}
+import teleporter.integration.cluster.rpc.EventBody.Empty
 import teleporter.integration.cluster.rpc.fbs._
-import teleporter.integration.cluster.rpc.fbs.generate.{EventStatus, EventType, Role}
 
 /**
   * Created by huanwuji 
   * date 2017/1/3.
   */
-case class TeleporterEvent[T](var seqNr: Long = 0, eventType: Byte, role: Byte = Role.None, status: Byte = EventStatus.None, body: T) {
-  def toFlat: FlatBufferBuilder = {
-    TeleporterEvent.toFlat(this)
-  }
-
-  def toArray: Array[Byte] = toFlat.sizedByteArray()
-
-  def toBody[E]: E = this.body.asInstanceOf[E]
+case class TeleporterEvent[T <: EventBody](var seqNr: Long = 0, eventType: Byte, status: Byte = EventStatus.None, role: Byte, body: T) {
+  def toBody[E <: EventBody]: E = this.body.asInstanceOf[E]
 }
 
 object TeleporterEvent {
-  type EventHandle = PartialFunction[(Byte, TeleporterEvent[Any]), Unit]
+  type EventHandle = PartialFunction[(Byte, TeleporterEvent[_ <: EventBody]), Unit]
 
-  def toFlat(event: TeleporterEvent[_]): FlatBufferBuilder = {
-    val builder = new FlatBufferBuilder()
-    val body = event.eventType match {
-      case EventType.KVGet ⇒ KVGet.toArray(event.toBody[KVGet])
-      case EventType.RangeRegexKV ⇒ RangeRegexKV.toArray(event.toBody[RangeRegexKV])
-      case EventType.KVSave ⇒ KV.toArray(event.toBody[KeyValue])
-      case EventType.AtomicSaveKV ⇒ AtomicKV.toArray(event.toBody[AtomicKeyValue])
-      case EventType.KVRemove ⇒ KVRemove.toArray(event.toBody[KVRemove])
-      case EventType.LogRequest ⇒ LogRequest.toArray(event.toBody[LogRequest])
-      case EventType.LogResponse ⇒ LogRequest.toArray(event.toBody[LogRequest])
-      case EventType.LinkInstance ⇒ LinkInstance.toArray(event.toBody[LinkInstance])
-      case EventType.LinkAddress ⇒ LinkAddress.toArray(event.toBody[LinkAddress])
-      case EventType.LinkVariable ⇒ LinkVariable.toArray(event.toBody[LinkVariable])
-      case EventType.TaskState ⇒ TaskState.toArray(event.toBody[TaskState])
-      case EventType.BrokerState ⇒ BrokerState.toArray(event.toBody[BrokerState])
-      case EventType.InstanceState ⇒ InstanceState.toArray(event.toBody[InstanceState])
-      case EventType.ConfigChangeNotify ⇒ ConfigChangeNotify.toArray(event.toBody[ConfigChangeNotify])
+  trait Action[I <: EventBody, O <: EventBody] {
+    def event[T <: EventBody](event: TeleporterEvent[T]): Array[Byte] = {
+      event.role match {
+        case Role.Request ⇒ request(event.asInstanceOf[TeleporterEvent[I]])
+        case Role.Response ⇒ response(event.asInstanceOf[TeleporterEvent[O]])
+      }
     }
-    val bodyOffset = generate.TeleporterEvent.createBodyVector(builder, body)
-    val root = generate.TeleporterEvent.createTeleporterEvent(
-      builder, event.seqNr, event.eventType, event.role, event.status, bodyOffset
-    )
-    builder.finish(root)
-    builder
-  }
 
-  def apply[T](bs: ByteString): TeleporterEvent[Any] = {
-    val event = generate.TeleporterEvent.getRootAsTeleporterEvent(bs.asByteBuffer)
-    val body = event.eventType() match {
-      case EventType.KVGet ⇒ KVGet(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.RangeRegexKV ⇒ RangeRegexKV(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.KVSave ⇒ KV(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.AtomicSaveKV ⇒ AtomicKV(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.KVRemove ⇒ KVRemove(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.LogRequest ⇒ LogRequest(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.LogResponse ⇒ LogRequest(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.LinkInstance ⇒ LinkInstance(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.LinkAddress ⇒ LinkAddress(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.LinkVariable ⇒ LinkVariable(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.TaskState ⇒ TaskState(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.BrokerState ⇒ BrokerState(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.InstanceState ⇒ InstanceState(Array.tabulate(event.bodyLength())(event.body))
-      case EventType.ConfigChangeNotify ⇒ ConfigChangeNotify(Array.tabulate(event.bodyLength())(event.body))
+    def event[T <: EventBody](event: fbs.RpcEvent): TeleporterEvent[T] = {
+      event.role() match {
+        case Role.Request ⇒ request(event).asInstanceOf[TeleporterEvent[T]]
+        case Role.Response ⇒ response(event).asInstanceOf[TeleporterEvent[T]]
+      }
     }
-    TeleporterEvent(
-      seqNr = event.seqNr(),
-      eventType = event.eventType(),
-      role = event.role(),
-      status = event.status(),
-      body = body
-    )
+
+    def request(event: TeleporterEvent[I]): Array[Byte] = {
+      val builder = new FlatBufferBuilder()
+      val bodyOffset = fbs.RpcEvent.createBodyVector(builder, requestBody(event.body))
+      val root = fbs.RpcEvent.createRpcEvent(
+        builder, event.seqNr, event.eventType, event.role, event.status, bodyOffset
+      )
+      builder.finish(root)
+      builder.sizedByteArray()
+    }
+
+    protected def requestBody(body: I): Array[Byte]
+
+    def request(event: fbs.RpcEvent): TeleporterEvent[I] = {
+      TeleporterEvent(
+        seqNr = event.seqNr(),
+        eventType = event.eventType(),
+        status = event.status(),
+        role = Role.Request,
+        body = requestBody(Array.tabulate(event.bodyLength())(event.body))
+      )
+    }
+
+    protected def requestBody(bytes: Array[Byte]): I
+
+    def response(event: TeleporterEvent[O]): Array[Byte] = {
+      val builder = new FlatBufferBuilder()
+      val bodyOffset = fbs.RpcEvent.createBodyVector(builder, responseBody(event.body))
+      val root = fbs.RpcEvent.createRpcEvent(
+        builder, event.seqNr, event.eventType, event.role, event.status, bodyOffset
+      )
+      builder.finish(root)
+      builder.sizedByteArray()
+    }
+
+    protected def responseBody(body: O): Array[Byte]
+
+    def response(event: fbs.RpcEvent): TeleporterEvent[O] = {
+      TeleporterEvent(
+        seqNr = event.seqNr(),
+        eventType = event.eventType(),
+        status = event.status(),
+        role = Role.Response,
+        body = responseBody(Array.tabulate(event.bodyLength())(event.body))
+      )
+    }
+
+    protected def responseBody(bytes: Array[Byte]): O
   }
 
-  def success[T](event: TeleporterEvent[T]): TeleporterEvent[T] = {
-    event.copy(status = EventStatus.Success)
+  object KVGetAction extends Action[EventBody.KVGet, EventBody.KV] {
+    override protected def requestBody(body: EventBody.KVGet): Array[Byte] = EventBody.KVGet.toArray(body)
+
+    override protected def requestBody(bytes: Array[Byte]): EventBody.KVGet = EventBody.KVGet(bytes)
+
+    override protected def responseBody(body: EventBody.KV): Array[Byte] = EventBody.KV.toArray(body)
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.KV = EventBody.KV(bytes)
   }
 
-  def failure[T](event: TeleporterEvent[T]): TeleporterEvent[T] = {
-    event.copy(status = EventStatus.Failure)
-  }
-}
+  object RangeRegexAction extends Action[EventBody.RangeRegexKV, EventBody.KVS] {
+    override protected def requestBody(body: EventBody.RangeRegexKV): Array[Byte] = EventBody.RangeRegexKV.toArray(body)
 
-object KV {
-  def apply(t: generate.KV): KeyValue = {
-    KeyValue(key = t.key(), value = t.value())
-  }
+    override protected def requestBody(bytes: Array[Byte]): EventBody.RangeRegexKV = EventBody.RangeRegexKV(bytes)
 
-  def apply(bytes: Array[Byte]): KeyValue = {
-    val t = generate.KV.getRootAsKV(ByteBuffer.wrap(bytes))
-    apply(t)
+    override protected def responseBody(body: EventBody.KVS): Array[Byte] = EventBody.KVS.toArray(body)
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.KVS = EventBody.KVS(bytes)
   }
 
-  def toOffset(body: KeyValue, builder: FlatBufferBuilder): Int = {
-    generate.KV.createKV(builder, builder.createString(body.key), builder.createString(body.value))
+  object KVSaveAction extends Action[EventBody.KV, EventBody.Empty] {
+    override protected def requestBody(body: EventBody.KV): Array[Byte] = EventBody.KV.toArray(body)
+
+    override protected def requestBody(bytes: Array[Byte]): EventBody.KV = EventBody.KV(bytes)
+
+    override protected def responseBody(body: EventBody.Empty): Array[Byte] = EventBody.Empty.toArray
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.Empty = EventBody.Empty.empty
   }
 
-  def toArray(body: KeyValue): Array[Byte] = {
-    val builder = new FlatBufferBuilder()
-    val root = toOffset(body, builder)
-    builder.finish(root)
-    builder.sizedByteArray()
-  }
-}
+  object AtomicSaveAction extends Action[EventBody.AtomicKV, EventBody.Empty] {
+    override protected def requestBody(body: EventBody.AtomicKV): Array[Byte] = EventBody.AtomicKV.toArray(body)
 
-object AtomicKV {
-  def apply(bytes: Array[Byte]): AtomicKeyValue = {
-    val t = generate.AtomicKV.getRootAsAtomicKV(ByteBuffer.wrap(bytes))
-    AtomicKeyValue(key = t.key(), expect = t.expect(), update = t.update())
+    override protected def requestBody(bytes: Array[Byte]): EventBody.AtomicKV = EventBody.AtomicKV(bytes)
+
+    override protected def responseBody(body: EventBody.Empty): Array[Byte] = EventBody.Empty.toArray
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.Empty = EventBody.Empty.empty
   }
 
-  def toArray(body: AtomicKeyValue): Array[Byte] = {
-    val builder = new FlatBufferBuilder()
-    val root = generate.AtomicKV.createAtomicKV(builder,
-      builder.createString(body.key),
-      builder.createString(body.expect),
-      builder.createString(body.update)
-    )
-    builder.finish(root)
-    builder.sizedByteArray()
-  }
-}
+  object KVRemoveAction extends Action[EventBody.KVRemove, EventBody.Empty] {
+    override protected def requestBody(body: EventBody.KVRemove): Array[Byte] = EventBody.KVRemove.toArray(body)
 
-case class KVS(kvs: Array[KeyValue])
+    override protected def requestBody(bytes: Array[Byte]): EventBody.KVRemove = EventBody.KVRemove(bytes)
 
-object KVS {
-  def apply(bytes: Array[Byte]): KVS = {
-    val t = generate.KVS.getRootAsKVS(ByteBuffer.wrap(bytes))
-    KVS(Array.tabulate(t.kvsLength())(i ⇒ KV(t.kvs(i))))
+    override protected def responseBody(body: EventBody.Empty): Array[Byte] = EventBody.Empty.toArray
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.Empty = EventBody.Empty.empty
   }
 
-  def toArray(body: KVS): Array[Byte] = {
-    val builder = new FlatBufferBuilder()
-    val kvs = generate.KVS.createKvsVector(builder, body.kvs.map(KV.toOffset(_, builder)))
-    val root = generate.KVS.createKVS(builder, kvs)
-    builder.finish(root)
-    builder.sizedByteArray()
+  object LogTraceAction extends Action[EventBody.LogTailRequest, EventBody.LogTailResponse] {
+    override protected def requestBody(body: EventBody.LogTailRequest): Array[Byte] = EventBody.LogTailRequest.toArray(body)
+
+    override protected def requestBody(bytes: Array[Byte]): EventBody.LogTailRequest = EventBody.LogTailRequest(bytes)
+
+    override protected def responseBody(body: EventBody.LogTailResponse): Array[Byte] = EventBody.LogTailResponse.toArray(body)
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.LogTailResponse = EventBody.LogTailResponse(bytes)
+  }
+
+  object LinkInstanceAction extends Action[EventBody.LinkInstance, EventBody.Empty] {
+    override protected def requestBody(body: EventBody.LinkInstance): Array[Byte] = EventBody.LinkInstance.toArray(body)
+
+    override protected def requestBody(bytes: Array[Byte]): EventBody.LinkInstance = EventBody.LinkInstance(bytes)
+
+    override protected def responseBody(body: EventBody.Empty): Array[Byte] = EventBody.Empty.toArray
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.Empty = EventBody.Empty.empty
+  }
+
+  object LinkAddressAction extends Action[EventBody.LinkAddress, EventBody.Empty] {
+    override protected def requestBody(body: EventBody.LinkAddress): Array[Byte] = EventBody.LinkAddress.toArray(body)
+
+    override protected def requestBody(bytes: Array[Byte]): EventBody.LinkAddress = EventBody.LinkAddress(bytes)
+
+    override protected def responseBody(body: EventBody.Empty): Array[Byte] = EventBody.Empty.toArray
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.Empty = EventBody.Empty.empty
+  }
+
+  object LinkVariableAction extends Action[EventBody.LinkVariable, EventBody.Empty] {
+    override protected def requestBody(body: EventBody.LinkVariable): Array[Byte] = EventBody.LinkVariable.toArray(body)
+
+    override protected def requestBody(bytes: Array[Byte]): EventBody.LinkVariable = EventBody.LinkVariable(bytes)
+
+    override protected def responseBody(body: EventBody.Empty): Array[Byte] = EventBody.Empty.toArray
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.Empty = EventBody.Empty.empty
+  }
+
+  object ConfigChangeNotifyAction extends Action[EventBody.ConfigChangeNotify, EventBody.Empty] {
+    override protected def requestBody(body: EventBody.ConfigChangeNotify): Array[Byte] = EventBody.ConfigChangeNotify.toArray(body)
+
+    override protected def requestBody(bytes: Array[Byte]): EventBody.ConfigChangeNotify = EventBody.ConfigChangeNotify(bytes)
+
+    override protected def responseBody(body: EventBody.Empty): Array[Byte] = EventBody.Empty.toArray
+
+    override protected def responseBody(bytes: Array[Byte]): EventBody.Empty = EventBody.Empty.empty
+  }
+
+  def toArray(event: TeleporterEvent[_ <: EventBody]): Array[Byte] = {
+    event.eventType match {
+      case EventType.KVGet ⇒ KVGetAction.event(event)
+      case EventType.RangeRegexKV ⇒ RangeRegexAction.event(event)
+      case EventType.KVSave ⇒ KVSaveAction.event(event)
+      case EventType.AtomicSaveKV ⇒ AtomicSaveAction.event(event)
+      case EventType.KVRemove ⇒ KVRemoveAction.event(event)
+      case EventType.LogTail ⇒ LogTraceAction.event(event)
+      case EventType.LinkInstance ⇒ LinkInstanceAction.event(event)
+      case EventType.LinkAddress ⇒ LinkAddressAction.event(event)
+      case EventType.LinkVariable ⇒ LinkVariableAction.event(event)
+      case EventType.ConfigChangeNotify ⇒ ConfigChangeNotifyAction.event(event)
+    }
+  }
+
+  def apply[T <: EventBody](bs: ByteString): TeleporterEvent[T] = {
+    val event = fbs.RpcEvent.getRootAsRpcEvent(bs.asByteBuffer)
+    event.eventType() match {
+      case EventType.KVGet ⇒ KVGetAction.event(event)
+      case EventType.RangeRegexKV ⇒ RangeRegexAction.event(event)
+      case EventType.KVSave ⇒ KVSaveAction.event(event)
+      case EventType.AtomicSaveKV ⇒ AtomicSaveAction.event(event)
+      case EventType.KVRemove ⇒ KVRemoveAction.event(event)
+      case EventType.LogTail ⇒ LogTraceAction.event(event)
+      case EventType.LinkInstance ⇒ LinkInstanceAction.event(event)
+      case EventType.LinkAddress ⇒ LinkAddressAction.event(event)
+      case EventType.LinkVariable ⇒ LinkVariableAction.event(event)
+      case EventType.ConfigChangeNotify ⇒ ConfigChangeNotifyAction.event(event)
+    }
+  }
+
+  def success[T <: EventBody](event: TeleporterEvent[T]): TeleporterEvent[Empty] = {
+    event.copy(role = Role.Response, status = EventStatus.Success, body = EventBody.Empty.empty)
+  }
+
+  def failure[T <: EventBody](event: TeleporterEvent[T]): TeleporterEvent[Empty] = {
+    event.copy(role = Role.Response, status = EventStatus.Failure, body = EventBody.Empty.empty)
   }
 }

@@ -6,9 +6,11 @@ import teleporter.integration.ActorTestMessages.{Ping, Pong}
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
 import teleporter.integration.cluster.broker.PersistentProtocol.{Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.SendMessage
-import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
-import teleporter.integration.cluster.rpc.{LinkAddress, LinkVariable, TeleporterEvent}
+import teleporter.integration.cluster.rpc.EventBody.{LinkAddress, LinkVariable}
+import teleporter.integration.cluster.rpc.TeleporterEvent
+import teleporter.integration.cluster.rpc.fbs.{EventType, Role}
 import teleporter.integration.core.TeleporterContext.{SyncBroker, _}
+import teleporter.integration.supervision.StreamDecider
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{MultiIndexMap, TwoIndexMap}
 
@@ -54,7 +56,7 @@ case class TaskContext(id: Long, key: String, config: TaskMetaBean, streamSchedu
   }
 }
 
-case class StreamContext(id: Long, key: String, config: StreamMetaBean) extends ExtraKeys with ComponentContext {
+case class StreamContext(id: Long, key: String, config: StreamMetaBean, decider: StreamDecider) extends ExtraKeys with ComponentContext {
   def task()(implicit center: TeleporterCenter): TaskContext = {
     center.context.getContext[TaskContext](Keys(TASK, Keys.unapply(key, STREAM)))
   }
@@ -173,14 +175,14 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
       ctx match {
         case _: PartitionContext ⇒
         case taskContext: TaskContext ⇒
-          taskContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+          taskContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
         case streamContext: StreamContext ⇒
-          streamContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+          streamContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
         case sourceContext: SourceContext ⇒
-          sourceContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+          sourceContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
           sourceContext.config.addressOption.foreach(addLinkKeys)
         case sinkContext: SinkContext ⇒
-          sinkContext.config.extraKeys.toMap.values.foreach({ case (_, v: String) ⇒ addLinkKeys(v) })
+          sinkContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
           sinkContext.config.addressOption.foreach(addLinkKeys)
         case _: AddressContext ⇒
         case _: VariableContext ⇒
@@ -236,14 +238,14 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
         case ctx: AddressContext ⇒
           center.eventListener.asyncEvent { seqNr ⇒
             center.brokers ! SendMessage(
-              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkAddress, role = Role.CLIENT,
+              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkAddress, role = Role.Request,
                 body = LinkAddress(address = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
             )
           }
         case ctx: VariableContext ⇒
           center.eventListener.asyncEvent { seqNr ⇒
             center.brokers ! SendMessage(
-              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkVariable, role = Role.CLIENT,
+              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkVariable, role = Role.Request,
                 body = LinkVariable(variableKey = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
             )
           }

@@ -26,7 +26,7 @@ object TeleporterAttribute {
     }
 
     def apply(key: String, config: ConfigMetaBean)(implicit center: TeleporterCenter): SupervisionStrategy = {
-      TeleporterSupervisionStrategy(key, DecideRule(key, config), center)
+      TeleporterSupervisionStrategy(key, DecideRule(config), center)
     }
   }
 

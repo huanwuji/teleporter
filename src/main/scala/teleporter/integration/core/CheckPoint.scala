@@ -3,10 +3,9 @@ package teleporter.integration.core
 import kafka.common.TopicAndPartition
 import kafka.javaapi.consumer.ZkKafkaConsumerConnector
 import org.apache.logging.log4j.scala.Logging
-import teleporter.integration.cluster.broker.PersistentProtocol.AtomicKeyValue
 import teleporter.integration.cluster.instance.Brokers.SendMessage
-import teleporter.integration.cluster.rpc.TeleporterEvent
-import teleporter.integration.cluster.rpc.fbs.generate.{EventType, Role}
+import teleporter.integration.cluster.rpc.fbs.{EventType, Role}
+import teleporter.integration.cluster.rpc.{EventBody, TeleporterEvent}
 import teleporter.integration.component.Kafka.KafkaLocation
 import teleporter.integration.utils.{Jackson, MapBean}
 
@@ -39,8 +38,8 @@ class SourceCheckPointImpl()(implicit center: TeleporterCenter) extends CheckPoi
     val sourceContext = center.context.getContext[SourceContext](key)
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.AtomicSaveKV, role = Role.CLIENT,
-          body = AtomicKeyValue(key = key,
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.AtomicSaveKV, role = Role.Request,
+          body = EventBody.AtomicKV(key = key,
             expect = Jackson.mapper.writeValueAsString(sourceContext.config.toMap),
             update = Jackson.mapper.writeValueAsString(point.toMap)))
       )
@@ -52,8 +51,8 @@ class SourceCheckPointImpl()(implicit center: TeleporterCenter) extends CheckPoi
     val targetStreamConfig = streamConfig.status(StreamStatus.COMPLETE)
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.AtomicSaveKV, role = Role.CLIENT,
-          body = AtomicKeyValue(key = key,
+        TeleporterEvent(seqNr = seqNr, eventType = EventType.AtomicSaveKV, role = Role.Request,
+          body = EventBody.AtomicKV(key = key,
             expect = Jackson.mapper.writeValueAsString(streamConfig.toMap),
             update = Jackson.mapper.writeValueAsString(targetStreamConfig)))
       )

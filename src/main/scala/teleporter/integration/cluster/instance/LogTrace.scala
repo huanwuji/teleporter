@@ -11,8 +11,9 @@ import org.apache.logging.log4j.core.appender.RollingFileAppender
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.instance.LogTrace.{Check, Line, LogTailer}
-import teleporter.integration.cluster.rpc.fbs.generate.EventType
-import teleporter.integration.cluster.rpc.{LogRequest, LogResponse, TeleporterEvent}
+import teleporter.integration.cluster.rpc.EventBody.{LogTailRequest, LogTailResponse}
+import teleporter.integration.cluster.rpc.TeleporterEvent
+import teleporter.integration.cluster.rpc.fbs.{EventType, Role}
 import teleporter.integration.component.file.FileTailer
 import teleporter.integration.core.TeleporterCenter
 
@@ -31,11 +32,11 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with Logging {
   var logTailer: LogTailer = _
   var checkSchedule: Cancellable = _
   var currTime: Long = System.currentTimeMillis()
-  val eventQueue: mutable.Queue[TeleporterEvent[LogRequest]] = mutable.Queue[TeleporterEvent[LogRequest]]()
+  val eventQueue: mutable.Queue[TeleporterEvent[LogTailRequest]] = mutable.Queue[TeleporterEvent[LogTailRequest]]()
   val logs: mutable.Queue[Line] = mutable.Queue[Line]()
 
   override def receive: Receive = {
-    case event: TeleporterEvent[LogRequest] ⇒
+    case event: TeleporterEvent[LogTailRequest] ⇒
       currTime = System.currentTimeMillis()
       if (logTailer == null) {
         createLog4j2Tailer()
@@ -46,7 +47,7 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with Logging {
       if (eventQueue.isEmpty) {
         logs += line
       } else {
-        center.brokers ! SendMessage(TeleporterEvent(eventType = EventType.LogResponse, body = LogResponse(s)))
+        center.brokers ! SendMessage(TeleporterEvent(eventType = EventType.LogTail, role = Role.Response, body = LogTailResponse(s)))
         if (eventQueue.nonEmpty) delivery()
       }
     case Check ⇒
