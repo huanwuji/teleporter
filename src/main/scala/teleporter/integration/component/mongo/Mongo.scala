@@ -1,12 +1,11 @@
 package teleporter.integration.component.mongo
 
 import akka.stream.scaladsl.Source
-import akka.stream.{Attributes, TeleporterAttribute}
+import akka.stream.{Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import org.mongodb.scala.{Document, MongoClient, MongoCollection}
 import teleporter.integration.component.Roller.RollerContext
 import teleporter.integration.component._
-import teleporter.integration.component.jdbc.SqlSupport
 import teleporter.integration.core._
 import teleporter.integration.script.Template
 import teleporter.integration.utils.Converters._
@@ -18,20 +17,20 @@ import scala.concurrent.{ExecutionContext, Future}
   * Created by joker on 15/12/07
   */
 object Mongo {
-  def sourceAck(sourceKey: String, addressBind: Option[String] = None)
+  def sourceAck(sourceKey: String)
                (implicit center: TeleporterCenter): Source[AckMessage[MapBean, MongoMessage], NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
-    source(sourceKey, addressBind).mapConcat(m ⇒ m.data.map { d ⇒
+    source(sourceKey).mapConcat(m ⇒ m.data.map { d ⇒
       SourceMessage(RollerContext.merge(sourceContext.config, m.coordinate), d)
     }.toIndexedSeq)
       .via(SourceAck.flow[MongoMessage](sourceContext.id, sourceContext.config))
   }
 
-  def source(sourceKey: String, addressBind: Option[String] = None)
+  def source(sourceKey: String)
             (implicit center: TeleporterCenter): Source[SourceMessage[RollerContext, Seq[MongoMessage]], NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
     val mongoSourceConfig = sourceContext.config.mapTo[MongoSourceMetaBean]
-    val bind = addressBind.getOrElse(sourceKey)
+    val bind = Option(sourceContext.config.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     Source.fromGraph(new MongoSourceAsync(
       filter = mongoSourceConfig.filter,
@@ -45,7 +44,7 @@ object Mongo {
         (_, _) ⇒
           center.context.unRegister(sourceKey, bind)
           Future.successful(Done)
-      })).addAttributes(Attributes(TeleporterAttribute.SupervisionStrategy(sourceKey, sourceContext.config)))
+      })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
   }
 
   def address(key: String)(implicit center: TeleporterCenter): AutoCloseClientRef[MongoClient] = {
@@ -88,9 +87,10 @@ class MongoSourceAsync(filter: Option[String],
                        rollerContext: RollerContext,
                        _create: (ExecutionContext) ⇒ Future[MongoCollection[MongoMessage]],
                        _close: (MongoCollection[MongoMessage], ExecutionContext) ⇒ Future[Done])
-  extends RollerSourceAsync[SourceMessage[RollerContext, Seq[MongoMessage]], MongoCollection[MongoMessage]]("jdbc.source", rollerContext) with SqlSupport {
+  extends RollerSourceAsync[SourceMessage[RollerContext, Seq[MongoMessage]], MongoCollection[MongoMessage]]("jdbc.source", rollerContext) {
 
-  override def readData(client: MongoCollection[MongoMessage], rollerContext: RollerContext, executionContext: ExecutionContext): Future[Option[SourceMessage[RollerContext, Seq[MongoMessage]]]] = {
+  override def readData(client: MongoCollection[MongoMessage], rollerContext: RollerContext, executionContext: ExecutionContext)
+  : Future[Option[SourceMessage[RollerContext, Seq[MongoMessage]]]] = {
     implicit val ec = executionContext
     val filterDoc = filter.map(s ⇒ Document(Template(s, rollerContext.toMap))).getOrElse(Document())
     val query = client.find(filterDoc)

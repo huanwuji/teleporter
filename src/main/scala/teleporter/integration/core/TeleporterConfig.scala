@@ -4,7 +4,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, Props, Status}
 import akka.dispatch.Futures
 import akka.pattern._
-import akka.stream.TeleporterAttribute.SupervisionStrategy
+import akka.stream.TeleporterAttributes.SupervisionStrategy
 import akka.util.Timeout
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
@@ -96,14 +96,11 @@ class AddressMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
   def category: String = apply[String](FCategory)
 
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
-
-  def share: Boolean = this.get[Boolean](FShare).getOrElse(false)
 }
 
 object AddressMetaBean {
   val FCategory = "category"
   val FClient = "client"
-  val FShare = "share"
 }
 
 class SourceMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
@@ -112,20 +109,23 @@ class SourceMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
 
   def category: String = apply[String](FCategory)
 
-  def address: String = apply[String](FAddress)
+  def address: MapBean = apply[MapBean](FAddress)
 
-  def addressOption: Option[String] = this.get[String](FAddress)
+  def addressOption: Option[MapBean] = this.get[MapBean](FAddress)
+
+  def addressKey: String = get[String](FAddress, FAddressKey).filter(_.nonEmpty).orNull
+
+  def addressBind: String = get[String](FAddress, FAddressBind).filter(_.nonEmpty).orNull
 
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
-
-  def shadow: Boolean = this.get[Boolean](FShadow).exists(b ⇒ b)
 }
 
 object SourceMetaBean {
   val FCategory = "category"
   val FAddress = "address"
+  val FAddressKey = "key"
+  val FAddressBind = "bind"
   val FClient = "client"
-  val FShadow = "shadow"
 }
 
 class SinkMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
@@ -134,9 +134,9 @@ class SinkMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
 
   def category: String = apply[String](FCategory)
 
-  def address: String = apply[String](FAddress)
+  def addressKey: String = get[String](FAddress, FAddressKey).filter(_.nonEmpty).orNull
 
-  def addressOption: Option[String] = this.get[String](FAddress)
+  def addressBind: String = get[String](FAddress, FAddressBind).filter(_.nonEmpty).orNull
 
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
 }
@@ -144,6 +144,8 @@ class SinkMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
 object SinkMetaBean {
   val FCategory = "category"
   val FAddress = "address"
+  val FAddressKey = "key"
+  val FAddressBind = "bind"
   val FClient = "client"
 }
 
@@ -278,10 +280,11 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
       val km = kv.metaBean[SourceMetaBean]
       val sourceId = km.value.id
       val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value)
-      km.value.addressOption match {
-        case Some(addressKey) if addressKey.nonEmpty ⇒
+      val sourceConfig = km.value
+      sourceConfig.addressKey match {
+        case x if x != null & x.nonEmpty ⇒
           for {
-            _ ← self ? LoadAddress(addressKey, trigger = false)
+            _ ← self ? LoadAddress(sourceConfig.addressKey, trigger = false)
             _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
               .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
           } yield {
@@ -299,10 +302,11 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
         val km = kv.metaBean[SourceMetaBean]
         val sourceId = km.value.id
         val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value)
-        km.value.addressOption match {
-          case Some(addressKey) if addressKey.nonEmpty ⇒
+        val sourceConfig = km.value
+        sourceConfig.addressKey match {
+          case x if x != null & x.nonEmpty ⇒
             for {
-              _ ← self ? LoadAddress(addressKey, trigger = false)
+              _ ← self ? LoadAddress(sourceConfig.addressKey, trigger = false)
               _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
                 .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
             } yield {
@@ -321,10 +325,11 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
       val km = kv.metaBean[SinkMetaBean]
       val sinkId = km.value.id
       val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value)
-      km.value.addressOption match {
-        case Some(addressKey) if addressKey.nonEmpty ⇒
+      val sinkConfig = km.value
+      sinkConfig.addressKey match {
+        case x if x != null & x.nonEmpty ⇒
           for {
-            _ ← self ? LoadAddress(addressKey, trigger = false)
+            _ ← self ? LoadAddress(sinkConfig.addressKey, trigger = false)
             _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
               .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
           } yield {
@@ -342,17 +347,18 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
         val km = kv.metaBean[SinkMetaBean]
         val sinkId = km.value.id
         val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value)
-        km.value.addressOption match {
-          case Some(addressKey) ⇒
+        val sinkConfig = km.value
+        sinkConfig.addressKey match {
+          case x if x != null & x.nonEmpty ⇒
             for {
-              _ ← self ? LoadAddress(addressKey, trigger = false)
+              _ ← self ? LoadAddress(sinkConfig.addressKey, trigger = false)
               _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
                 .asInstanceOf[Seq[Future[ComponentContext]]].asJava, context.dispatcher)
             } yield {
               center.context.ref ! Upsert(sinkContext, trigger)
               sinkContext
             }
-          case None ⇒ Future.successful(sinkContext)
+          case _ ⇒ Future.successful(sinkContext)
         }
       }
       Futures.sequence(sinkContexts.asJava, dispatcher)

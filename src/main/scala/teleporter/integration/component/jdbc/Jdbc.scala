@@ -4,7 +4,7 @@ import java.util.Properties
 import javax.sql.DataSource
 
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
-import akka.stream.{Attributes, TeleporterAttribute}
+import akka.stream.{Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import teleporter.integration.component.Roller.RollerContext
@@ -20,17 +20,17 @@ import scala.util.control.NonFatal
   * created: 2015/8/2.
   */
 object Jdbc {
-  def sourceAck(sourceKey: String, addressBind: Option[String] = None)
+  def sourceAck(sourceKey: String)
                (implicit center: TeleporterCenter): Source[AckMessage[MapBean, JdbcMessage], NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
-    source(sourceKey, addressBind).map(m ⇒ SourceMessage(RollerContext.merge(sourceContext.config, m.coordinate), m.data))
+    source(sourceKey).map(m ⇒ SourceMessage(RollerContext.merge(sourceContext.config, m.coordinate), m.data))
       .via(SourceAck.flow[JdbcMessage](sourceContext.id, sourceContext.config))
   }
 
-  def source(sourceKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Source[SourceMessage[RollerContext, JdbcMessage], NotUsed] = {
+  def source(sourceKey: String)(implicit center: TeleporterCenter): Source[SourceMessage[RollerContext, JdbcMessage], NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
     val sourceConfig = sourceContext.config.mapTo[JdbcSourceMetaBean]
-    val bind = addressBind.getOrElse(sourceKey)
+    val bind = Option(sourceConfig.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     Source.fromGraph(new JdbcSource(
       sql = sourceConfig.sql,
@@ -39,17 +39,17 @@ object Jdbc {
       _close = {
         _ ⇒
           center.context.unRegister(sourceKey, bind)
-      })).addAttributes(Attributes(TeleporterAttribute.SupervisionStrategy(sourceKey, sourceContext.config)))
+      })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
   }
 
-  def sink(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Sink[Message[JdbcRecord], Future[Done]] = {
-    flow(sinkKey, addressBind).toMat(Sink.ignore)(Keep.right)
+  def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[JdbcRecord], Future[Done]] = {
+    flow(sinkKey).toMat(Sink.ignore)(Keep.right)
   }
 
-  def flow(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Flow[Message[JdbcRecord], Message[JdbcRecord], NotUsed] = {
+  def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[JdbcRecord], Message[JdbcRecord], NotUsed] = {
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
     val sinkConfig = sinkContext.config.mapTo[JdbcSinkMetaBean]
-    val bind = addressBind.getOrElse(sinkKey)
+    val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new JdbcSink(
       parallelism = sinkConfig.parallelism,
@@ -60,7 +60,7 @@ object Jdbc {
         (_, _) ⇒
           center.context.unRegister(sinkKey, bind)
           Future.successful(Done)
-      })).addAttributes(Attributes(TeleporterAttribute.SupervisionStrategy(sinkKey, sinkContext.config)))
+      })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
   }
 
   def address(addressKey: String)(implicit center: TeleporterCenter): AutoCloseClientRef[HikariDataSource] = {
@@ -100,7 +100,7 @@ class JdbcSinkMetaBean(override val underlying: JdbcMessage) extends SinkMetaBea
 class JdbcSource(sql: String, rollerContext: RollerContext, _create: () ⇒ DataSource, _close: DataSource ⇒ Unit)
   extends RollerSource[DataSource, SourceMessage[RollerContext, JdbcMessage]]("jdbc.source", rollerContext) with SqlSupport {
 
-  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttribute.BlockingDispatcher
+  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 
   var sqlResult: SqlResult[Iterator[JdbcMessage]] = _
   var it: Iterator[JdbcMessage] = _
@@ -132,7 +132,8 @@ class JdbcSource(sql: String, rollerContext: RollerContext, _create: () ⇒ Data
   }
 }
 
-class JdbcSink(parallelism: Int, _create: (ExecutionContext) ⇒ Future[DataSource], _close: (DataSource, ExecutionContext) ⇒ Future[Done])(implicit val center: TeleporterCenter)
+class JdbcSink(parallelism: Int, _create: (ExecutionContext) ⇒ Future[DataSource],
+               _close: (DataSource, ExecutionContext) ⇒ Future[Done])(implicit val center: TeleporterCenter)
   extends CommonSinkAsyncUnordered[DataSource, Message[JdbcRecord], Message[JdbcRecord]]("jdbc.sink", parallelism) with SqlSupport {
   override def create(executionContext: ExecutionContext): Future[DataSource] = _create(executionContext)
 

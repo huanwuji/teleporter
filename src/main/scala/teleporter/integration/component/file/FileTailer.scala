@@ -2,14 +2,14 @@ package teleporter.integration.component.file
 
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
-import java.nio.file.{Files, Path, StandardOpenOption}
+import java.nio.file.{Path, StandardOpenOption}
 import java.util
 
 import akka.NotUsed
 import akka.actor.Cancellable
 import akka.stream.scaladsl.Source
 import akka.stream.stage.GraphStageLogic
-import akka.stream.{Attributes, TeleporterAttribute}
+import akka.stream.{Attributes, TeleporterAttributes}
 import akka.util.ByteString
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.component.{CommonSource, CommonSourceGraphStageLogic}
@@ -28,11 +28,11 @@ object FileTailer {
   }
 }
 
-class FileTailer(path: Path, end: Boolean) extends CommonSource[FileChannel, ByteString]("file.tailer") with Logging {
+class FileTailer(path: Path, end: Boolean, bufferSize: Int = 4096) extends CommonSource[FileChannel, ByteString]("file.tailer") with Logging {
 
-  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttribute.IODispatcher
+  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.IODispatcher
 
-  private val inbuf: ByteBuffer = ByteBuffer.allocate(4096)
+  private val inbuf: ByteBuffer = ByteBuffer.allocate(bufferSize)
   var schedule: Cancellable = _
   private var chan: FileChannel = _
   private var position: Long = _
@@ -48,7 +48,6 @@ class FileTailer(path: Path, end: Boolean) extends CommonSource[FileChannel, Byt
   }
 
   override def readData(client: FileChannel): Option[ByteString] = {
-    val newer: Boolean = Files.getLastModifiedTime(path).toMillis > last
     // IO-279, must be done first
     // Check the file length to see if it was rotated
     val length: Long = chan.size()
@@ -62,15 +61,6 @@ class FileTailer(path: Path, end: Boolean) extends CommonSource[FileChannel, Byt
       // See if the file needs to be read again
       if (length > position) {
         // The file has more content than it did last time
-        last = System.currentTimeMillis
-        read()
-      } else if (newer) {
-        /*
-         * This can happen if the file is truncated or overwritten with the exact same length of
-         * information. In cases like this, the file position needs to be reset
-        */
-        position = 0
-        chan.position(position) // cannot be null here
         last = System.currentTimeMillis
         read()
       } else {

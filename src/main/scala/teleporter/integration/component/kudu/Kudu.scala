@@ -3,7 +3,7 @@ package teleporter.integration.component.kudu
 import java.sql.{Date, Timestamp}
 
 import akka.stream.scaladsl.{Flow, Keep, Sink}
-import akka.stream.{Attributes, TeleporterAttribute}
+import akka.stream.{Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import com.stumbleupon.async.Callback
 import org.apache.kudu.client.SessionConfiguration.FlushMode
@@ -21,9 +21,9 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
   * Created by joker on 16/3/3
   */
 object Kudu {
-  def flow(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Flow[Message[KuduRecord], Message[KuduRecord], NotUsed] = {
+  def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[KuduRecord], Message[KuduRecord], NotUsed] = {
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
-    val bind = addressBind.getOrElse(sinkKey)
+    val bind = Option(sinkContext.config.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new KuduSinkAsync(1,
       (ec) ⇒ Future {
@@ -33,13 +33,13 @@ object Kudu {
           center.context.unRegister(sinkKey, bind)
           Future.successful(Done)
       }))
-      .addAttributes(Attributes(TeleporterAttribute.SupervisionStrategy(sinkKey, sinkContext.config)))
+      .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
       .via(Metrics.count[Message[KuduRecord]](sinkKey)(center.metricsRegistry))
 
   }
 
-  def sink(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Sink[Message[KuduRecord], Future[Done]] = {
-    flow(sinkKey, addressBind).toMat(Sink.ignore)(Keep.right)
+  def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[KuduRecord], Future[Done]] = {
+    flow(sinkKey).toMat(Sink.ignore)(Keep.right)
   }
 
   def address(addressKey: String)(implicit center: TeleporterCenter): AutoCloseClientRef[AsyncKuduClient] = {

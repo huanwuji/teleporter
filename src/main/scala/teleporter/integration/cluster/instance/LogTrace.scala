@@ -71,7 +71,7 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with Logging {
       case (_, v: RollingFileAppender) ⇒ Paths.get(v.getFileName)
     }.head
     val queue = FileTailer.source(path)
-      .via(Framing.delimiter(ByteString.fromString("\n"), 1024 * 5))
+      .via(Framing.delimiter(ByteString.fromString(System.lineSeparator()), 1024 * 5))
       .runWith(Sink.queue())
     this.logTailer = LogTailer(path, queue)
     checkSchedule = context.system.scheduler.schedule(2.seconds, 2.seconds, self, Check)

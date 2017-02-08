@@ -1,8 +1,8 @@
 package teleporter.integration.supervision
 
 import akka.actor.ActorRef
-import akka.stream.TeleporterAttribute
-import akka.stream.TeleporterAttribute.{SupervisionStrategy, TeleporterSupervisionStrategy}
+import akka.stream.TeleporterAttributes
+import akka.stream.TeleporterAttributes.{SupervisionStrategy, TeleporterSupervisionStrategy}
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.core.Streams.DelayCommand
 import teleporter.integration.core._
@@ -41,16 +41,15 @@ object Supervision {
 
   object Directive extends Logging {
     //retry(delay = 1.minutes, retries = 3, next = stop)
-    val actionMatch: Regex = "\\s*(\\w+)\\(.*\\)".r
+    val actionMatch: Regex = "\\s*(\\w+)\\((.*)\\)".r
 
     def apply(directive: String): Directive = {
       directive match {
         case actionMatch(action, params) ⇒
-          val paramsMap = params.split(",").map {
-            param ⇒
-              val Array(name, value) = param.replaceAll("\\s", "").split("=")
-              (name, value)
-          }.toMap
+          val paramsMap = params.split(",")
+            .map(_.replaceAll("\\s*", "").split("="))
+            .collect { case Array(name, value) ⇒ (name, value) }
+            .toMap
           val retries = paramsMap.get("retries").map(_.toInt).getOrElse(1)
           val delay = paramsMap.get("delay").map(Duration(_)).getOrElse(Duration.Zero)
           val next = paramsMap.get("next").map(parseDirective(_, 1, Duration.Zero, None))
@@ -77,12 +76,10 @@ object Decider {
   type Decide = PartialFunction[(Throwable, Directive), Any]
 }
 
-trait Decider {
-  def supervisionStrategy: TeleporterAttribute.SupervisionStrategy
+trait Decider extends Logging {
+  def supervisionStrategy: TeleporterAttributes.SupervisionStrategy
 
-  def teleporterFailure(ex: Throwable): Unit = {
-    matchRule(ex).foreach(rule ⇒ decide(ex, rule.directive))
-  }
+  def teleporterFailure(ex: Throwable): Unit = logger.error(s"Exception will catch and process, ${ex.getMessage}", ex)
 
   protected def matchRule(ex: Throwable): Option[DecideRule] = {
     supervisionStrategy match {
@@ -97,7 +94,7 @@ trait Decider {
   }
 
   private def matchRule(cause: Throwable, rules: Seq[DecideRule]): Option[DecideRule] = {
-    rules.find(r ⇒ r.errorMatch.findFirstIn(cause.getMessage).isDefined || r.errorMatch.findFirstIn(cause.getClass.getName).isDefined)
+    rules.find(r ⇒ (cause.getMessage != null && r.errorMatch.findFirstIn(cause.getMessage).isDefined) || r.errorMatch.findFirstIn(cause.getClass.getName).isDefined)
   }
 
   protected def decide: Decide
@@ -108,6 +105,7 @@ class StreamDecider(key: String, streamRef: ActorRef, val supervisionStrategy: S
   var lastExecuteTime: Long = System.currentTimeMillis()
 
   override def teleporterFailure(ex: Throwable): Unit = {
+    super.teleporterFailure(ex)
     lastExecuteTime = System.currentTimeMillis()
     if (System.currentTimeMillis() - lastExecuteTime > 5.minutes.toMillis) {
       retries = 0
@@ -182,7 +180,7 @@ trait SinkDecider extends Decider {
 case class DecideRule(errorMatch: Regex, level: String, directive: Directive)
 
 object DecideRule {
-  val ruleMatch: Regex = "(.*)(:(DEBUG|INFO|WARN|ERROR))?\\s*=>\\s*(.*)".r
+  val ruleMatch: Regex = "(.*?)(:(DEBUG|INFO|WARN|ERROR))?\\s*=>\\s*(.*)".r
   val ALL_MATCH: Regex = ".".r
 
   def apply(errorMatch: String, level: String, directive: String): DecideRule = {
@@ -190,7 +188,7 @@ object DecideRule {
   }
 
   /**
-    * runtimeException => restart|stop|retry|restart(1.seconds, 1, stop)
+    * runtimeException => restart|stop|retry|restart(delay = 1.seconds, retries = 1, next = stop)
     * regex: handler
     * Unknown column: stop
     */

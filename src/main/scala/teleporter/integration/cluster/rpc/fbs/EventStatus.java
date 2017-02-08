@@ -3,13 +3,17 @@
 package teleporter.integration.cluster.rpc.fbs;
 
 public final class EventStatus {
-  private EventStatus() { }
-  public static final byte Failure = 0;
-  public static final byte Success = 1;
-  public static final byte None = 2;
+    private EventStatus() {
+    }
 
-  public static final String[] names = { "Failure", "Success", "None", };
+    public static final byte Failure = 0;
+    public static final byte Success = 1;
+    public static final byte None = 2;
 
-  public static String name(int e) { return names[e]; }
+    public static final String[] names = {"Failure", "Success", "None",};
+
+    public static String name(int e) {
+        return names[e];
+    }
 }
 

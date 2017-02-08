@@ -80,7 +80,7 @@ case class SourceContext(id: Long, key: String, config: SourceMetaBean, actorRef
   }
 
   def address()(implicit center: TeleporterCenter): AddressContext = {
-    center.context.getContext[AddressContext](config.address)
+    center.context.getContext[AddressContext](config.addressKey)
   }
 }
 
@@ -94,7 +94,7 @@ case class SinkContext(id: Long, key: String, config: SinkMetaBean, actorRef: Ac
   }
 
   def address()(implicit center: TeleporterCenter): AddressContext = {
-    center.context.getContext[AddressContext](config.address)
+    center.context.getContext[AddressContext](config.addressKey)
   }
 }
 
@@ -180,10 +180,12 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
           streamContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
         case sourceContext: SourceContext ⇒
           sourceContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
-          sourceContext.config.addressOption.foreach(addLinkKeys)
+          val addressKey = sourceContext.config.addressKey
+          if (addressKey != null && addressKey.nonEmpty) addLinkKeys(addressKey)
         case sinkContext: SinkContext ⇒
           sinkContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
-          sinkContext.config.addressOption.foreach(addLinkKeys)
+          val addressKey = sinkContext.config.addressKey
+          if (addressKey != null && addressKey.nonEmpty) addLinkKeys(addressKey)
         case _: AddressContext ⇒
         case _: VariableContext ⇒
       }
@@ -200,14 +202,14 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
         case _: StreamContext ⇒
         case ctx: SourceContext ⇒
           val oldSourceContext = center.context.getContext[SourceContext](ctx.id)
-          if (oldSourceContext.config.address != ctx.config.address) {
-            removeLinkKeys(oldSourceContext.config.address)
-            addLinkKeys(ctx.config.address)
+          if (oldSourceContext.config.addressKey != ctx.config.addressKey) {
+            if (oldSourceContext.config.addressKey != null) removeLinkKeys(oldSourceContext.config.addressKey)
+            if (ctx.config.addressKey != null) addLinkKeys(ctx.config.addressKey)
           }
         case ctx: SinkContext ⇒
           val oldSinkContext = center.context.getContext[SinkContext](ctx.id)
-          if (oldSinkContext.config.address != ctx.config.address) {
-            removeLinkKeys(oldSinkContext.config.address)
+          if (oldSinkContext.config.addressKey != ctx.config.addressKey) {
+            removeLinkKeys(oldSinkContext.config.addressKey)
             addLinkKeys(ctx.key)
           }
         case _: AddressContext ⇒
@@ -226,9 +228,9 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
           ctx.sources().foreach(self ! Remove(_))
           ctx.sinks().foreach(self ! Remove(_))
         case ctx: SourceContext ⇒
-          removeLinkKeys(ctx.config.address)
+          if (ctx.config.addressKey != null) removeLinkKeys(ctx.config.addressKey)
         case ctx: SinkContext ⇒
-          removeLinkKeys(ctx.config.address)
+          if (ctx.config.addressKey != null) removeLinkKeys(ctx.config.addressKey)
         case _: AddressContext ⇒
         case _: VariableContext ⇒
       }

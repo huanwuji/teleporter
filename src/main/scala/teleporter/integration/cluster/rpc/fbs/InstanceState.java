@@ -5,54 +5,131 @@ package teleporter.integration.cluster.rpc.fbs;
 import java.nio.*;
 import java.lang.*;
 import java.util.*;
+
 import com.google.flatbuffers.*;
 
 @SuppressWarnings("unused")
 public final class InstanceState extends Table {
-  public static InstanceState getRootAsInstanceState(ByteBuffer _bb) { return getRootAsInstanceState(_bb, new InstanceState()); }
-  public static InstanceState getRootAsInstanceState(ByteBuffer _bb, InstanceState obj) { _bb.order(ByteOrder.LITTLE_ENDIAN); return (obj.__init(_bb.getInt(_bb.position()) + _bb.position(), _bb)); }
-  public InstanceState __init(int _i, ByteBuffer _bb) { bb_pos = _i; bb = _bb; return this; }
+    public static InstanceState getRootAsInstanceState(ByteBuffer _bb) {
+        return getRootAsInstanceState(_bb, new InstanceState());
+    }
 
-  public String instance() { int o = __offset(4); return o != 0 ? __string(o + bb_pos) : null; }
-  public ByteBuffer instanceAsByteBuffer() { return __vector_as_bytebuffer(4, 1); }
-  public String broker() { int o = __offset(6); return o != 0 ? __string(o + bb_pos) : null; }
-  public ByteBuffer brokerAsByteBuffer() { return __vector_as_bytebuffer(6, 1); }
-  public String ip() { int o = __offset(8); return o != 0 ? __string(o + bb_pos) : null; }
-  public ByteBuffer ipAsByteBuffer() { return __vector_as_bytebuffer(8, 1); }
-  public int port() { int o = __offset(10); return o != 0 ? bb.getInt(o + bb_pos) : 0; }
-  public String partitions(int j) { int o = __offset(12); return o != 0 ? __string(__vector(o) + j * 4) : null; }
-  public int partitionsLength() { int o = __offset(12); return o != 0 ? __vector_len(o) : 0; }
-  public long timestamp() { int o = __offset(14); return o != 0 ? bb.getLong(o + bb_pos) : 0; }
+    public static InstanceState getRootAsInstanceState(ByteBuffer _bb, InstanceState obj) {
+        _bb.order(ByteOrder.LITTLE_ENDIAN);
+        return (obj.__init(_bb.getInt(_bb.position()) + _bb.position(), _bb));
+    }
 
-  public static int createInstanceState(FlatBufferBuilder builder,
-      int instanceOffset,
-      int brokerOffset,
-      int ipOffset,
-      int port,
-      int partitionsOffset,
-      long timestamp) {
-    builder.startObject(6);
-    InstanceState.addTimestamp(builder, timestamp);
-    InstanceState.addPartitions(builder, partitionsOffset);
-    InstanceState.addPort(builder, port);
-    InstanceState.addIp(builder, ipOffset);
-    InstanceState.addBroker(builder, brokerOffset);
-    InstanceState.addInstance(builder, instanceOffset);
-    return InstanceState.endInstanceState(builder);
-  }
+    public InstanceState __init(int _i, ByteBuffer _bb) {
+        bb_pos = _i;
+        bb = _bb;
+        return this;
+    }
 
-  public static void startInstanceState(FlatBufferBuilder builder) { builder.startObject(6); }
-  public static void addInstance(FlatBufferBuilder builder, int instanceOffset) { builder.addOffset(0, instanceOffset, 0); }
-  public static void addBroker(FlatBufferBuilder builder, int brokerOffset) { builder.addOffset(1, brokerOffset, 0); }
-  public static void addIp(FlatBufferBuilder builder, int ipOffset) { builder.addOffset(2, ipOffset, 0); }
-  public static void addPort(FlatBufferBuilder builder, int port) { builder.addInt(3, port, 0); }
-  public static void addPartitions(FlatBufferBuilder builder, int partitionsOffset) { builder.addOffset(4, partitionsOffset, 0); }
-  public static int createPartitionsVector(FlatBufferBuilder builder, int[] data) { builder.startVector(4, data.length, 4); for (int i = data.length - 1; i >= 0; i--) builder.addOffset(data[i]); return builder.endVector(); }
-  public static void startPartitionsVector(FlatBufferBuilder builder, int numElems) { builder.startVector(4, numElems, 4); }
-  public static void addTimestamp(FlatBufferBuilder builder, long timestamp) { builder.addLong(5, timestamp, 0); }
-  public static int endInstanceState(FlatBufferBuilder builder) {
-    int o = builder.endObject();
-    return o;
-  }
+    public String instance() {
+        int o = __offset(4);
+        return o != 0 ? __string(o + bb_pos) : null;
+    }
+
+    public ByteBuffer instanceAsByteBuffer() {
+        return __vector_as_bytebuffer(4, 1);
+    }
+
+    public String broker() {
+        int o = __offset(6);
+        return o != 0 ? __string(o + bb_pos) : null;
+    }
+
+    public ByteBuffer brokerAsByteBuffer() {
+        return __vector_as_bytebuffer(6, 1);
+    }
+
+    public String ip() {
+        int o = __offset(8);
+        return o != 0 ? __string(o + bb_pos) : null;
+    }
+
+    public ByteBuffer ipAsByteBuffer() {
+        return __vector_as_bytebuffer(8, 1);
+    }
+
+    public int port() {
+        int o = __offset(10);
+        return o != 0 ? bb.getInt(o + bb_pos) : 0;
+    }
+
+    public String partitions(int j) {
+        int o = __offset(12);
+        return o != 0 ? __string(__vector(o) + j * 4) : null;
+    }
+
+    public int partitionsLength() {
+        int o = __offset(12);
+        return o != 0 ? __vector_len(o) : 0;
+    }
+
+    public long timestamp() {
+        int o = __offset(14);
+        return o != 0 ? bb.getLong(o + bb_pos) : 0;
+    }
+
+    public static int createInstanceState(FlatBufferBuilder builder,
+                                          int instanceOffset,
+                                          int brokerOffset,
+                                          int ipOffset,
+                                          int port,
+                                          int partitionsOffset,
+                                          long timestamp) {
+        builder.startObject(6);
+        InstanceState.addTimestamp(builder, timestamp);
+        InstanceState.addPartitions(builder, partitionsOffset);
+        InstanceState.addPort(builder, port);
+        InstanceState.addIp(builder, ipOffset);
+        InstanceState.addBroker(builder, brokerOffset);
+        InstanceState.addInstance(builder, instanceOffset);
+        return InstanceState.endInstanceState(builder);
+    }
+
+    public static void startInstanceState(FlatBufferBuilder builder) {
+        builder.startObject(6);
+    }
+
+    public static void addInstance(FlatBufferBuilder builder, int instanceOffset) {
+        builder.addOffset(0, instanceOffset, 0);
+    }
+
+    public static void addBroker(FlatBufferBuilder builder, int brokerOffset) {
+        builder.addOffset(1, brokerOffset, 0);
+    }
+
+    public static void addIp(FlatBufferBuilder builder, int ipOffset) {
+        builder.addOffset(2, ipOffset, 0);
+    }
+
+    public static void addPort(FlatBufferBuilder builder, int port) {
+        builder.addInt(3, port, 0);
+    }
+
+    public static void addPartitions(FlatBufferBuilder builder, int partitionsOffset) {
+        builder.addOffset(4, partitionsOffset, 0);
+    }
+
+    public static int createPartitionsVector(FlatBufferBuilder builder, int[] data) {
+        builder.startVector(4, data.length, 4);
+        for (int i = data.length - 1; i >= 0; i--) builder.addOffset(data[i]);
+        return builder.endVector();
+    }
+
+    public static void startPartitionsVector(FlatBufferBuilder builder, int numElems) {
+        builder.startVector(4, numElems, 4);
+    }
+
+    public static void addTimestamp(FlatBufferBuilder builder, long timestamp) {
+        builder.addLong(5, timestamp, 0);
+    }
+
+    public static int endInstanceState(FlatBufferBuilder builder) {
+        int o = builder.endObject();
+        return o;
+    }
 }
 

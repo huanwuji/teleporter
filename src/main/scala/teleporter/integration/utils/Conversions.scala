@@ -13,8 +13,8 @@ trait Conversions {
   private val NULL: String = "null"
 
   def asInt(v: Any): Option[Int] = v match {
-    case s: String if s.isEmpty ⇒ None
     case NULL ⇒ None
+    case s: String if s.isEmpty ⇒ None
     case s: String ⇒ Some(s.toInt)
     case i: Int ⇒ Some(i)
     case d: Double => Some(d.toInt)
@@ -25,6 +25,7 @@ trait Conversions {
   def asLong(v: Any): Option[Long] = v match {
     case s: String if s.isEmpty ⇒ None
     case NULL ⇒ None
+    case s: String if s.isEmpty ⇒ None
     case s: String ⇒ Some(s.toLong)
     case bi: BigInt ⇒ Some(bi.toLong)
     case i: Int ⇒ Some(i.toLong)

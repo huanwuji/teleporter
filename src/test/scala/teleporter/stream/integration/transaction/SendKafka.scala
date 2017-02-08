@@ -1,8 +1,9 @@
 //package teleporter.stream.integration.transaction
 
 import akka.Done
-import akka.stream.scaladsl.{Keep, Source}
+import akka.stream.scaladsl.{Keep, Sink, Source}
 import akka.stream.{KillSwitch, KillSwitches}
+import org.apache.commons.lang3.RandomStringUtils
 import org.apache.kafka.clients.producer.ProducerRecord
 import teleporter.integration.component.Kafka
 import teleporter.integration.core.Streams.StreamLogic
@@ -17,15 +18,16 @@ import scala.concurrent.duration._
   */
 object SendKafka extends StreamLogic {
   override def apply(key: String, center: TeleporterCenter): (KillSwitch, Future[Done]) = {
-    println("--------------stream1---------------------")
+    println("--------------SendKafka---------------------")
     import center.{materializer, self}
     Source.tick(1.second, 1.second, "test")
-      .map { str ⇒
-        println(str)
-        Message(data = new ProducerRecord[Array[Byte], Array[Byte]]("test", str))
+      .map { _ ⇒
+        val s = RandomStringUtils.randomAlphabetic(10)
+        println(s)
+        Message(data = new ProducerRecord[Array[Byte], Array[Byte]]("ppp", "1", s))
       }
+      .via(Kafka.flow("/sink/test/test_task/kafka_send/send_sink"))
       .viaMat(KillSwitches.single)(Keep.right).watchTermination()(Keep.both)
-      .to(Kafka.sink("/sink/test/kuidai_test_task1/kuidai_task1_stream1/kafka_test"))
-      .run()
+      .to(Sink.ignore).run()
   }
 }

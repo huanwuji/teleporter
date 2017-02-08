@@ -61,7 +61,7 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
   @scala.throws[Exception](classOf[Exception])
   override def onDownstreamFinish(): Unit = closeStage()
 
-  private def closeStage(): Unit =
+  protected def closeStage(): Unit =
     try {
       close(client)
       completeStage()
@@ -77,10 +77,10 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
     }
   }
 
-  override def supervisionStrategy: TeleporterAttribute.SupervisionStrategy = inheritedAttributes.get[TeleporterAttribute.SupervisionStrategy].getOrElse(TeleporterAttribute.emptySupervisionStrategy)
+  override def supervisionStrategy: TeleporterAttributes.SupervisionStrategy = inheritedAttributes.get[TeleporterAttributes.SupervisionStrategy].getOrElse(TeleporterAttributes.emptySupervisionStrategy)
 
   override def teleporterFailure(ex: Throwable): Unit = {
-    retries += 1
+    super.teleporterFailure(ex)
     matchRule(ex).foreach {
       rule ⇒
         if (retries < rule.directive.retries) {
@@ -89,6 +89,7 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
             case d: FiniteDuration ⇒ scheduleOnce((ex, rule.directive), d)
             case _ ⇒
           }
+          retries += 1
         } else {
           rule.directive.next.foreach(decide(ex, _))
         }
@@ -98,13 +99,17 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
   override def reload(ex: Throwable): Unit = {
     close(client)
     preStart()
+    retry(ex)
   }
 
   override def retry(ex: Throwable): Unit = onPull()
 
   override def resume(ex: Throwable): Unit = onPull()
 
-  override def stop(ex: Throwable): Unit = failStage(ex)
+  override def stop(ex: Throwable): Unit = {
+    close(client)
+    failStage(ex)
+  }
 
   setHandler(shape.out, this)
 }
@@ -112,11 +117,11 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
 abstract class CommonSource[C, Out](name: String) extends GraphStage[SourceShape[Out]] {
   override protected def initialAttributes: Attributes = Attributes.name(name)
 
-  override def shape: SourceShape[Out] = SourceShape(Outlet[Out](s"$name.out"))
+  val out: Outlet[Out] = Outlet[Out](s"$name.out")
+
+  override def shape: SourceShape[Out] = SourceShape(out)
 
   override val toString: String = name
-
-  val out: Outlet[Out] = shape.out
 
   def create(): C
 
@@ -146,6 +151,8 @@ object Roller {
 
   sealed trait State
 
+  case object Normal extends State
+
   case object Paging extends State
 
   case object Timing extends State
@@ -162,12 +169,20 @@ object Roller {
 
     import RollerMetaBean._
 
+    def canPaging: Boolean = pagination.exists(p ⇒ p.page <= p.maxPage)
+
     def nextPage(): RollerContext = {
       require(this.pagination.isDefined, "Pagination must support before call")
       val pagination = this.pagination.get
       val nextPagination = pagination.copy(page = pagination.page + 1)
       this.copy(pagination = Some(nextPagination), state = Paging)
     }
+
+    def onlyPage: Boolean = pagination.isDefined && timeline.isEmpty
+
+    def onlyTimeline: Boolean = pagination.isEmpty && timeline.isDefined
+
+    def isPageTimeline: Boolean = pagination.isDefined && timeline.isDefined
 
     def firstPage(): RollerContext = {
       require(this.pagination.isDefined, "Pagination must support before call")
@@ -177,18 +192,23 @@ object Roller {
     }
 
     def nextTimeline(): RollerContext = {
-      require(this.timeline.isDefined, "Pagination must support before call")
+      require(this.timeline.isDefined, "Timeline must support before call")
       val timeline = this.timeline.get
-      val distance = java.time.Duration.between(timeline.start, timeline.deadline()).toNanos
-      val step = distance min timeline.maxPeriod.toNanos min timeline.period.toNanos
-      val nextTimeline = timeline.copy(start = timeline.start, end = timeline.start.plusNanos(step))
+      val begin = if (timeline.end == null) timeline.start else timeline.end
+      val distance = java.time.Duration.between(begin, timeline.deadline()).toNanos
+      val step = if (forever) {
+        (distance min timeline.maxPeriod.toNanos) min (distance max timeline.period.toNanos)
+      } else {
+        (distance min timeline.maxPeriod.toNanos) max (distance min timeline.period.toNanos)
+      }
+      val nextTimeline = timeline.copy(start = begin, end = begin.plusNanos(step))
       this.copy(timeline = Some(nextTimeline), state = Timing)
     }
 
-    def timeNear: Boolean = {
-      require(this.forever, "Must forever roller")
-      val timeline = this.timeline.get
-      java.time.Duration.between(timeline.start, timeline.deadline()).toNanos < timeline.period.toNanos
+    def checkStartTimeOver: Boolean = !this.forever && timeline.exists(t ⇒ t.deadline().isEqual(t.start))
+
+    def checkStartTimeNear: Boolean = {
+      this.forever && this.timeline.exists(t ⇒ java.time.Duration.between(t.end, t.deadline()).toNanos < t.period.toNanos)
     }
 
     def toMap: Map[String, Any] = {
@@ -212,22 +232,22 @@ object Roller {
     }
 
     def apply(config: MapBean): RollerContext = {
-      val schedule = config.get[MapBean](FRoller).getOrElse(MapBean.empty)
-      val pagination = schedule.get[Int](FPage).map { page ⇒
+      val roller = config.get[MapBean](FRoller).getOrElse(MapBean.empty)
+      val pagination = roller.get[Int](FPage).map { page ⇒
         Pagination(
           page = page,
-          pageSize = schedule.get[Int](FPageSize).getOrElse(20),
-          maxPage = schedule.get[Int](FMaxPage).getOrElse(Int.MaxValue)
+          pageSize = roller.get[Int](FPageSize).getOrElse(20),
+          maxPage = roller.get[Int](FMaxPage).getOrElse(Int.MaxValue)
         )
       }
-      val timeline = schedule.get[Duration](FPeriod).map { period ⇒
+      val timeline = roller.get[Duration](FPeriod).map { period ⇒
         Timeline(
-          start = schedule[LocalDateTime](FStart),
-          end = schedule[LocalDateTime](FEnd),
+          start = roller[LocalDateTime](FStart),
+          end = roller.get[LocalDateTime](FEnd).orNull,
           period = period,
-          maxPeriod = schedule.get[Duration](FMaxPeriod).getOrElse(period),
-          deadline = schedule.get[String](FDeadline) match {
-            case Some("") | None ⇒ throw new IllegalArgumentException(s"deadline is required, $schedule")
+          maxPeriod = roller.get[Duration](FMaxPeriod).getOrElse(period),
+          deadline = roller.get[String](FDeadline) match {
+            case Some("") | None ⇒ throw new IllegalArgumentException(s"deadline is required, $roller")
             case Some("now") ⇒
               val now = LocalDateTime.now(); () ⇒ now
             case Some("fromNow") ⇒
@@ -240,11 +260,14 @@ object Roller {
               () ⇒ dateTime
           })
       }
-      RollerContext(pagination = pagination,
+      val state = if (pagination.isDefined) Paging else if (timeline.isDefined) Timing else Normal
+      val context = RollerContext(
+        pagination = pagination,
         timeline = timeline,
-        forever = schedule.get[String](FDeadline).exists(_.contains("fromNow")),
-        state = Paging
+        forever = roller.get[String](FDeadline).exists(_.contains("fromNow")),
+        state = state
       )
+      if (context.timeline.exists(_.end == null)) context.nextTimeline().copy(state = context.state) else context
     }
   }
 
@@ -255,61 +278,119 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
   import Roller._
 
   var currRollerContext: RollerContext = rollerContext
+  var nextContinued = true
+
+  override def readData(client: C): Option[Out] = {
+    if (currRollerContext.forever) {
+      foreverReadData(client)
+    } else {
+      beOverReadData(client)
+    }
+  }
 
   @tailrec
-  final override def readData(client: C): Option[Out] = {
-    val opt = readData(client, currRollerContext)
-    opt match {
+  final def foreverReadData(client: C): Option[Out] = {
+    val data = if (currRollerContext.checkStartTimeNear) {
+      return None
+    } else {
+      readData(client, currRollerContext)
+    }
+    data match {
       case None ⇒
         currRollerContext.state match {
+          case Normal ⇒ None
           case Paging ⇒
-            if (currRollerContext.timeline.isDefined && !(currRollerContext.forever && currRollerContext.timeNear)) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
-              readData(client)
+            currRollerContext = currRollerContext.nextTimeline()
+            currRollerContext = currRollerContext.firstPage()
+            if (currRollerContext.checkStartTimeNear) {
+              None
             } else {
-              opt
+              foreverReadData(client)
             }
           case Timing ⇒
             currRollerContext = currRollerContext.nextTimeline()
-            readData(client)
+            if (!currRollerContext.checkStartTimeNear) {
+              foreverReadData(client)
+            } else None
         }
       case Some(_) ⇒
         currRollerContext.state match {
-          case Paging ⇒ currRollerContext = currRollerContext.nextPage()
-          case Timing ⇒
-            if (currRollerContext.pagination.isEmpty && !(currRollerContext.forever && currRollerContext.timeNear)) {
+          case Normal ⇒
+          case Paging ⇒
+            currRollerContext = currRollerContext.nextPage()
+            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
               currRollerContext = currRollerContext.nextTimeline()
+              currRollerContext = currRollerContext.firstPage()
             }
+          case Timing ⇒
+            currRollerContext = currRollerContext.nextTimeline()
         }
-        opt
+        data
+    }
+  }
+
+  @tailrec
+  final def beOverReadData(client: C): Option[Out] = {
+    val data = if (currRollerContext.checkStartTimeOver || (currRollerContext.onlyPage && !currRollerContext.canPaging)) {
+      return None
+    } else readData(client, currRollerContext)
+    data match {
+      case None ⇒
+        currRollerContext.state match {
+          case Normal ⇒ None
+          case Paging ⇒
+            if (!currRollerContext.checkStartTimeOver) {
+              currRollerContext = currRollerContext.nextTimeline()
+              currRollerContext = currRollerContext.firstPage()
+              beOverReadData(client)
+            } else None
+          case Timing ⇒
+            if (!currRollerContext.checkStartTimeOver) {
+              currRollerContext = currRollerContext.nextTimeline()
+              beOverReadData(client)
+            } else None
+        }
+      case Some(_) ⇒
+        currRollerContext.state match {
+          case Normal ⇒
+          case Paging ⇒
+            currRollerContext = currRollerContext.nextPage()
+            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
+              currRollerContext = currRollerContext.nextTimeline()
+              currRollerContext = currRollerContext.firstPage()
+            }
+          case Timing ⇒
+            currRollerContext = currRollerContext.nextTimeline()
+        }
+        data
     }
   }
 
   def readData(client: C, rollerContext: RollerContext): Option[Out]
 
   @scala.throws[Exception](classOf[Exception])
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceGraphStageLogic(shape, create, readData, close, inheritedAttributes) {
-    @scala.throws[Exception](classOf[Exception])
-    override protected def onTimer(timerKey: Any): Unit = {
-      timerKey match {
-        case 'pull ⇒ onPull()
-        case _ ⇒ super.onTimer(timerKey)
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
+    new CommonSourceGraphStageLogic(shape, create, readData, close, inheritedAttributes) {
+      @scala.throws[Exception](classOf[Exception])
+      override protected def onTimer(timerKey: Any): Unit = {
+        timerKey match {
+          case 'pull ⇒ onPull()
+          case _ ⇒ super.onTimer(timerKey)
+        }
       }
-    }
 
-    override protected def pushData(): Unit = {
-      readData(client) match {
-        case None ⇒
-          if (!currRollerContext.forever) {
-            completeStage()
-          } else {
-            scheduleOnce('pull, currRollerContext.timeline.get.period.asInstanceOf[FiniteDuration] / 2)
-          }
-        case Some(elem) ⇒ push(shape.out, elem)
+      override protected def pushData(): Unit = {
+        readData(client) match {
+          case None ⇒
+            if (currRollerContext.forever) {
+              scheduleOnce('pull, currRollerContext.timeline.get.period.asInstanceOf[FiniteDuration] / 2)
+            } else {
+              closeStage()
+            }
+          case Some(elem) ⇒ push(shape.out, elem)
+        }
       }
     }
-  }
 }
 
 class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
@@ -319,22 +400,24 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
                                              inheritedAttributes: Attributes)
   extends TimerGraphStageLogic(shape) with SourceDecider with OutHandler with StageLogging {
 
-  implicit val executeContext: ExecutionContextExecutor = {
-    val mater = materializer.asInstanceOf[ActorMaterializer]
-    val dispatcherAttr = inheritedAttributes.getAttribute(classOf[TeleporterAttribute.Dispatcher])
-    if (dispatcherAttr.isPresent) {
-      mater.system.dispatchers.lookup(dispatcherAttr.get().dispatcher)
-    } else {
-      mater.executionContext
-    }
-  }
+  implicit var executeContext: ExecutionContextExecutor = _
   var retries = 0
   var client: S = _
-  //  implicit val context = ExecutionContexts.sameThreadExecutionContext
   var resource: Promise[S] = Promise[S]()
   setHandler(shape.out, this)
 
-  override def preStart(): Unit = createStream(false)
+  override def preStart(): Unit = {
+    executeContext = {
+      val mater = materializer.asInstanceOf[ActorMaterializer]
+      val dispatcherAttr = inheritedAttributes.getAttribute(classOf[TeleporterAttributes.Dispatcher])
+      if (dispatcherAttr.isPresent) {
+        mater.system.dispatchers.lookup(dispatcherAttr.get().dispatcher)
+      } else {
+        mater.executionContext
+      }
+    }
+    createStream(false)
+  }
 
   private def createStream(withPull: Boolean): Unit = {
     val cb = getAsyncCallback[Try[S]] {
@@ -373,7 +456,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
 
   override def onDownstreamFinish(): Unit = closeStage()
 
-  private def closeAndThen(f: () ⇒ Unit): Unit = {
+  protected def closeAndThen(f: () ⇒ Unit): Unit = {
     setKeepGoing(true)
     val cb = getAsyncCallback[Try[Done]] {
       case scala.util.Success(_) ⇒ f()
@@ -394,7 +477,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
 
   private def closeStage(): Unit = closeAndThen(completeStage)
 
-  override def supervisionStrategy: TeleporterAttribute.SupervisionStrategy = inheritedAttributes.get[TeleporterAttribute.SupervisionStrategy].getOrElse(TeleporterAttribute.emptySupervisionStrategy)
+  override def supervisionStrategy: TeleporterAttributes.SupervisionStrategy = inheritedAttributes.get[TeleporterAttributes.SupervisionStrategy].getOrElse(TeleporterAttributes.emptySupervisionStrategy)
 
   @scala.throws[Exception](classOf[Exception])
   override protected def onTimer(timerKey: Any): Unit = {
@@ -405,7 +488,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
   }
 
   override def teleporterFailure(ex: Throwable): Unit = {
-    retries += 1
+    super.teleporterFailure(ex)
     ex match {
       case NonFatal(_) ⇒
         matchRule(ex).foreach {
@@ -413,9 +496,10 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
             if (retries < rule.directive.retries) {
               rule.directive.delay match {
                 case Duration.Zero ⇒ decide(ex, rule.directive)
-                case d: FiniteDuration ⇒ scheduleOnce(rule.directive, d)
+                case d: FiniteDuration ⇒ scheduleOnce((ex, rule.directive), d)
                 case _ ⇒
               }
+              retries += 1
             } else {
               rule.directive.next.foreach(decide(ex, _))
             }
@@ -430,8 +514,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
   override def resume(ex: Throwable): Unit = onPull()
 
   override def stop(ex: Throwable): Unit = {
-    onResourceReady(close(_, executeContext))
-    failStage(ex)
+    closeAndThen(() ⇒ failStage(ex))
   }
 }
 
@@ -452,47 +535,101 @@ abstract class CommonSourceAsync[T, S](name: String) extends GraphStage[SourceSh
   override def toString: String = name
 }
 
-abstract class RollerSourceAsync[T, S](name: String, rollerContext: RollerContext)
-  extends CommonSourceAsync[T, S](name) {
+abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContext)
+  extends CommonSourceAsync[T, C](name) {
 
   import Roller._
 
   var currRollerContext: RollerContext = rollerContext
 
-  override def readData(client: S, executionContext: ExecutionContext): Future[Option[T]] = {
-    implicit val ec = executionContext
-    val opt = readData(client, currRollerContext, executionContext)
-    opt flatMap {
-      case None ⇒
-        currRollerContext.state match {
-          case Paging ⇒
-            if (currRollerContext.timeline.isDefined && !(currRollerContext.forever && currRollerContext.timeNear)) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
-              readData(client, ec)
-            } else {
-              opt
-            }
-          case Timing ⇒
-            currRollerContext = currRollerContext.nextTimeline()
-            readData(client, ec)
-        }
-      case Some(_) ⇒
-        currRollerContext.state match {
-          case Paging ⇒ currRollerContext = currRollerContext.nextPage()
-          case Timing ⇒
-            if (currRollerContext.pagination.isEmpty && !(currRollerContext.forever && currRollerContext.timeNear)) {
-              currRollerContext = currRollerContext.nextTimeline()
-            }
-        }
-        opt
+  override def readData(client: C, executionContext: ExecutionContext): Future[Option[T]] = {
+    if (currRollerContext.forever) {
+      foreverReadData(client)(executionContext)
+    } else {
+      beOverReadData(client)(executionContext)
     }
   }
 
-  def readData(client: S, rollerContext: RollerContext, executionContext: ExecutionContext): Future[Option[T]]
+  final def foreverReadData(client: C)(implicit executionContext: ExecutionContext): Future[Option[T]] = {
+    val data = if (currRollerContext.checkStartTimeNear) {
+      return Future.successful(None)
+    } else {
+      readData(client, currRollerContext, executionContext)
+    }
+    data.flatMap {
+      case None ⇒
+        currRollerContext.state match {
+          case Normal ⇒ Future.successful(None)
+          case Paging ⇒
+            currRollerContext = currRollerContext.nextTimeline()
+            currRollerContext = currRollerContext.firstPage()
+            if (currRollerContext.checkStartTimeNear) {
+              Future.successful(None)
+            } else {
+              foreverReadData(client)
+            }
+          case Timing ⇒
+            currRollerContext = currRollerContext.nextTimeline()
+            if (!currRollerContext.checkStartTimeNear) {
+              foreverReadData(client)
+            } else Future.successful(None)
+        }
+      case Some(_) ⇒
+        currRollerContext.state match {
+          case Normal ⇒
+          case Paging ⇒
+            currRollerContext = currRollerContext.nextPage()
+            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
+              currRollerContext = currRollerContext.nextTimeline()
+              currRollerContext = currRollerContext.firstPage()
+            }
+          case Timing ⇒
+            currRollerContext = currRollerContext.nextTimeline()
+        }
+        data
+    }
+  }
+
+  final def beOverReadData(client: C)(implicit executionContext: ExecutionContext): Future[Option[T]] = {
+    val data = if (currRollerContext.checkStartTimeOver || (currRollerContext.onlyPage && !currRollerContext.canPaging)) {
+      return Future.successful(None)
+    } else readData(client, currRollerContext, executionContext)
+    data.flatMap {
+      case None ⇒
+        currRollerContext.state match {
+          case Normal ⇒ Future.successful(None)
+          case Paging ⇒
+            if (!currRollerContext.checkStartTimeOver) {
+              currRollerContext = currRollerContext.nextTimeline()
+              currRollerContext = currRollerContext.firstPage()
+              beOverReadData(client)
+            } else Future.successful(None)
+          case Timing ⇒
+            if (!currRollerContext.checkStartTimeOver) {
+              currRollerContext = currRollerContext.nextTimeline()
+              beOverReadData(client)
+            } else Future.successful(None)
+        }
+      case Some(_) ⇒
+        currRollerContext.state match {
+          case Normal ⇒
+          case Paging ⇒
+            currRollerContext = currRollerContext.nextPage()
+            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
+              currRollerContext = currRollerContext.nextTimeline()
+              currRollerContext = currRollerContext.firstPage()
+            }
+          case Timing ⇒
+            currRollerContext = currRollerContext.nextTimeline()
+        }
+        data
+    }
+  }
+
+  def readData(client: C, rollerContext: RollerContext, executionContext: ExecutionContext): Future[Option[T]]
 
   @scala.throws[Exception](classOf[Exception])
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceAsyncGraphStageLogic[T, S](shape, create, readData, close, inheritedAttributes) {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceAsyncGraphStageLogic[T, C](shape, create, readData, close, inheritedAttributes) {
     @scala.throws[Exception](classOf[Exception])
     override protected def onTimer(timerKey: Any): Unit = {
       timerKey match {
@@ -506,7 +643,7 @@ abstract class RollerSourceAsync[T, S](name: String, rollerContext: RollerContex
         case Some(d) ⇒ push(shape.out, d)
         case None ⇒
           if (!currRollerContext.forever) {
-            completeStage()
+            closeAndThen(completeStage)
           } else {
             scheduleOnce('pull, currRollerContext.timeline.get.period.asInstanceOf[FiniteDuration] / 2)
           }

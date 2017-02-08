@@ -32,7 +32,9 @@
       <td>
         {{kb.value.name}}
       </td>
-      <td><a *ngIf="kb.value.address" [routerLink]="[kb.value.address]">{{kb.value.address}}</a></td>
+      <td>
+        <a *ngIf="kb.value.address && kb.value.address.key" [routerLink]="[kb.value.address.key]">{{kb.value.address.key}}</a>
+      </td>
       <td>
         <span (click)="metricsName=kb.key">📈</span>&nbsp;<span (click)="refresh(kb.key)">🔁</span>&nbsp;<span
         (click)="del(kb.key)">❎</span>

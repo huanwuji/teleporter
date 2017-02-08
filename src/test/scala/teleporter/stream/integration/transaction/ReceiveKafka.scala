@@ -1,7 +1,7 @@
 //package teleporter.stream.integration.transaction
 
 import akka.Done
-import akka.stream.scaladsl.Keep
+import akka.stream.scaladsl.{Keep, Sink}
 import akka.stream.{KillSwitch, KillSwitches}
 import teleporter.integration.component.Kafka
 import teleporter.integration.core.Streams.StreamLogic
@@ -14,10 +14,10 @@ import scala.concurrent.Future
   */
 object ReceiveKafka extends StreamLogic {
   override def apply(key: String, center: TeleporterCenter): (KillSwitch, Future[Done]) = {
-    println("--------------stream1---------------------")
+    println("--------------ReceiveKafka---------------------")
     import center.{materializer, self}
-    Kafka.sourceAck("/source/test/kuidai_test_task2/stream_task2_stream1/kafka_test")
+    Kafka.sourceAck("/source/test/test_task/kafka_receiver/kafka_source")
       .viaMat(KillSwitches.single)(Keep.right).watchTermination()(Keep.both)
-      .to(SourceAck.confirmSink()).run()
+      .via(SourceAck.confirmFlow()).to(Sink.foreach(x ⇒ println(x))).run()
   }
 }

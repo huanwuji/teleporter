@@ -7,8 +7,7 @@ import {
   FormItemBase,
   GroupFormItem,
   DynamicGroupFormItem,
-  ArrayFormItem,
-  CheckboxFormItem
+  ArrayFormItem
 } from "../../../../dynamic/form/form-item";
 
 export interface Source extends Identity {
@@ -18,7 +17,6 @@ export interface Source extends Identity {
   category?: string;
   errorRules?: string;
   client?: any;
-  shadow?: string;
   arguments?: string;
 }
 
@@ -47,15 +45,13 @@ export class SourceService extends ConfigService<Source> {
         label: 'name',
         required: true
       }),
-      new TextboxFormItem({
+      new GroupFormItem({
         key: 'address',
         label: 'address',
-        required: true
-      }),
-      new CheckboxFormItem({
-        key: 'shadow',
-        label: 'shadow',
-        required: true
+        value: [
+          new TextboxFormItem({key: 'key', label: 'key'}),
+          new TextboxFormItem({key: 'bind', label: 'bind'}),
+        ]
       }),
       new DynamicGroupFormItem({
         key: 'extraKeys',
@@ -77,7 +73,7 @@ export class SourceService extends ConfigService<Source> {
     switch (category) {
       case 'kafka':
         return [
-          this.getTransactionItems(),
+          this.getAckItems(),
           new GroupFormItem({
             key: 'client',
             label: 'client',
@@ -86,8 +82,8 @@ export class SourceService extends ConfigService<Source> {
         ];
       case 'jdbc':
         return [
-          this.getTransactionItems(),
-          this.getScheduleItems(),
+          this.getAckItems(),
+          this.getRollerItems(),
           new GroupFormItem({
             key: 'client',
             label: 'client',
@@ -96,12 +92,21 @@ export class SourceService extends ConfigService<Source> {
         ];
       case 'mongo':
         return [
-          this.getTransactionItems(),
-          this.getScheduleItems(),
+          this.getAckItems(),
+          this.getRollerItems(),
           new GroupFormItem({
             key: 'client',
             label: 'client',
             value: this.getMongoItems()
+          })
+        ];
+      case 'hdfs':
+        return [
+          this.getAckItems(),
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getHdfsItems()
           })
         ];
       default:
@@ -109,10 +114,10 @@ export class SourceService extends ConfigService<Source> {
     }
   }
 
-  private getTransactionItems() {
+  private getAckItems() {
     return new GroupFormItem({
-      key: 'transaction',
-      label: 'transaction',
+      key: 'ack',
+      label: 'ack',
       value: [
         new TextboxFormItem({
           key: 'channelSize',
@@ -122,18 +127,18 @@ export class SourceService extends ConfigService<Source> {
           value: 1
         }),
         new TextboxFormItem({
-          key: 'batchSize',
-          label: 'batchSize',
+          key: 'batchCoordinateCommitNum',
+          label: 'batchCoordinateCommitNum',
           required: true,
           type: 'number',
-          value: 512
+          value: 25
         }),
         new TextboxFormItem({
           key: 'cacheSize',
           label: 'cacheSize',
           required: true,
           type: 'number',
-          value: 512
+          value: 100
         }),
         new TextboxFormItem({
           key: 'maxAge',
@@ -145,7 +150,7 @@ export class SourceService extends ConfigService<Source> {
     });
   }
 
-  private getScheduleItems() {
+  private getRollerItems() {
     return new GroupFormItem({
       key: 'roller',
       label: 'roller',
@@ -180,6 +185,15 @@ export class SourceService extends ConfigService<Source> {
       new TextboxFormItem({key: 'database', label: 'database'}),
       new TextboxFormItem({key: 'collection', label: 'collection'}),
       new TextboxFormItem({key: 'filter', label: 'filter'}),
+    ];
+  }
+
+  private getHdfsItems() {
+    return [
+      new TextboxFormItem({key: 'path', label: 'path'}),
+      new TextboxFormItem({key: 'offset', label: 'offset', type: 'number'}),
+      new TextboxFormItem({key: 'len', label: 'len', type: 'number'}),
+      new TextboxFormItem({key: 'bufferSize', label: 'bufferSize', type: '4096'}),
     ];
   }
 }

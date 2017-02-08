@@ -125,14 +125,14 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
         }
       })
     logger.info(s"$key stream will executed")
-    val (_, resultListener) = streamLogic(key, center)
-    resultListener.map { _ ⇒
+    val result = streamLogic(key, center)
+    streamStates += key → StreamState(result)
+    result._2.map { _ ⇒
       center.context.unRegister(key)
     } onComplete {
       case Success(v) ⇒ logger.info(s"$key was completed, $v")
       case Failure(e) ⇒ logger.error(s"$key execute failed", e)
     }
-    streamStates += key → StreamState(streamLogic(key, center))
   }
 
   private def loadTemplate(streamId: String, cache: Boolean = true): Option[Future[String]] = {

@@ -45,10 +45,13 @@ export class SinkService extends ConfigService<Sink> {
         label: 'name',
         required: true
       }),
-      new TextboxFormItem({
+      new GroupFormItem({
         key: 'address',
         label: 'address',
-        required: true
+        value: [
+          new TextboxFormItem({key: 'key', label: 'key'}),
+          new TextboxFormItem({key: 'bind', label: 'bind'}),
+        ]
       }),
       new DynamicGroupFormItem({
         key: 'extraKeys',
@@ -80,6 +83,8 @@ export class SinkService extends ConfigService<Sink> {
         return this.getElasticserach();
       case 'kudu':
         return this.getKuduItems();
+      case 'hdfs':
+        return this.getHdfsItems();
       default:
         throw new Error(`UnMatch sink category ${category}`)
     }
@@ -127,6 +132,13 @@ export class SinkService extends ConfigService<Sink> {
         required: true,
         value: 1
       })
+    ];
+  }
+
+  private getHdfsItems(): FormItemBase<any>[] {
+    return [
+      new TextboxFormItem({key: 'path', label: 'path'}),
+      new TextboxFormItem({key: 'overwrite', label: 'overwrite', value: true})
     ];
   }
 }

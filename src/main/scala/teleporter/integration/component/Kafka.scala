@@ -3,6 +3,7 @@ package teleporter.integration.component
 import java.util.Properties
 
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
+import akka.stream.{ActorAttributes, Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import kafka.common.TopicAndPartition
 import kafka.consumer.ConsumerConfig
@@ -34,11 +35,11 @@ object Kafka {
 
   }
 
-  def sourceAck(sourceKey: String, addressBind: Option[String] = None)
+  def sourceAck(sourceKey: String)
                (implicit center: TeleporterCenter): Source[AckMessage[KafkaLocation, KafkaMessage], NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
     val kafkaSourceConfig = sourceContext.config.mapTo[KafkaSourceMetaBean]
-    val bind = addressBind.getOrElse(sourceKey)
+    val bind = Option(sourceContext.config.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     val subscribeTopics = kafkaSourceConfig.topics.split(",").map(_.split(":"))
       .map { case Array(topic, threads) ⇒ (topic, Int.box(threads.toInt)) }.toMap
@@ -51,26 +52,27 @@ object Kafka {
         commit = coordinate ⇒ checkPoint.save(sourceKey, coordinate),
         finish = () ⇒ checkPoint.complete(sourceKey)
       ))
+      .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
   }
 
-  def source(sourceKey: String, addressBind: Option[String] = None)
-            (implicit center: TeleporterCenter): Source[KafkaMessage, NotUsed] = {
+  def source(sourceKey: String)(implicit center: TeleporterCenter): Source[KafkaMessage, NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
     val kafkaSourceConfig = sourceContext.config.mapTo[KafkaSourceMetaBean]
-    val bind = addressBind.getOrElse(sourceKey)
+    val bind = Option(sourceContext.config.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     val subscribeTopics = kafkaSourceConfig.topics.split(",").map(_.split(":"))
       .map { case Array(topic, threads) ⇒ (topic, Int.box(threads.toInt)) }.toMap
     center.context.register(addressKey, bind, () ⇒ consumer(addressKey)).client.subscribe(subscribeTopics)
+      .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
   }
 
-  def sink(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Sink[Message[KafkaRecord], Future[Done]] = {
-    flow(sinkKey, addressBind).toMat(Sink.ignore)(Keep.right)
+  def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[KafkaRecord], Future[Done]] = {
+    flow(sinkKey).toMat(Sink.ignore)(Keep.right)
   }
 
-  def flow(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Flow[Message[KafkaRecord], Message[KafkaRecord], NotUsed] = {
+  def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[KafkaRecord], Message[KafkaRecord], NotUsed] = {
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
-    val bind = addressBind.getOrElse(sinkKey)
+    val bind = Option(sinkContext.config.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new KafkaSinkAsync(parallelism = 1,
       _create = (ec) ⇒ Future {
@@ -80,6 +82,7 @@ object Kafka {
           center.context.unRegister(sinkKey, bind)
           Future.successful(Done)
       }))
+      .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
   }
 
   def producer(key: String)(implicit center: TeleporterCenter): AutoCloseClientRef[KafkaProducer[Array[Byte], Array[Byte]]] = {
@@ -115,6 +118,7 @@ class KafkaConsumer(val zkKafkaConnector: ZkKafkaConsumerConnector) extends Auto
       .values.flatMap(_.asScala)
     Source(streams.toIndexedSeq)
       .flatMapConcat(stream ⇒ Source.fromIterator(() ⇒ stream.iterator()))
+      .addAttributes(ActorAttributes.dispatcher(TeleporterAttributes.CacheDispatcher.dispatcher))
   }
 
   def commit(topicAndPartition: TopicAndPartition, offset: Long): Unit = {
@@ -145,10 +149,10 @@ class KafkaSinkAsync(parallelism: Int = 1,
     val promise = Promise[Message[KafkaRecord]]()
     client.send(elem.data, new Callback() {
       override def onCompletion(metadata: RecordMetadata, exception: Exception): Unit = {
-        if (exception != null) {
-          promise.failure(exception)
-        } else {
+        if (exception == null) {
           promise.success(elem)
+        } else {
+          promise.failure(exception)
         }
       }
     })

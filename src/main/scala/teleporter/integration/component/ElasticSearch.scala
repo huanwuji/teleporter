@@ -3,7 +3,7 @@ package teleporter.integration.component
 import java.net.InetSocketAddress
 
 import akka.stream.scaladsl.{Flow, Keep, Sink}
-import akka.stream.{Attributes, TeleporterAttribute}
+import akka.stream.{Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import org.elasticsearch.action.ActionListener
 import org.elasticsearch.action.bulk.BulkResponse
@@ -21,19 +21,19 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
   * Created by Yukai.wu on 2015/9/24.
   */
 object ElasticSearch {
-  def sink(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Sink[Message[ElasticRecord], Future[Done]] = {
-    flow(sinkKey, addressBind).toMat(Sink.ignore)(Keep.right)
+  def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[ElasticRecord], Future[Done]] = {
+    flow(sinkKey).toMat(Sink.ignore)(Keep.right)
   }
 
-  def bulkSink(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Sink[Seq[Message[ElasticRecord]], Future[Done]] = {
-    bulkFlow(sinkKey, addressBind).toMat(Sink.ignore)(Keep.right)
+  def bulkSink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Seq[Message[ElasticRecord]], Future[Done]] = {
+    bulkFlow(sinkKey).toMat(Sink.ignore)(Keep.right)
   }
 
-  def flow(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Flow[Message[ElasticRecord], Message[ElasticRecord], NotUsed] = {
+  def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[ElasticRecord], Message[ElasticRecord], NotUsed] = {
     implicit val ec: ExecutionContext = center.blockExecutionContext
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
     val sinkConfig = sinkContext.config.mapTo[ElasticSearchSinkMetaBean]
-    val bind = addressBind.getOrElse(sinkKey)
+    val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new ElasticSearchSink(
       parallelism = sinkConfig.parallelism,
@@ -44,13 +44,13 @@ object ElasticSearch {
         _ ⇒
           center.context.unRegister(sinkKey, bind)
           Future.successful(Done)
-      })).addAttributes(Attributes(TeleporterAttribute.SupervisionStrategy(sinkKey, sinkContext.config)))
+      })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
   }
 
-  def bulkFlow(sinkKey: String, addressBind: Option[String] = None)(implicit center: TeleporterCenter): Flow[Seq[Message[ElasticRecord]], Seq[Message[ElasticRecord]], NotUsed] = {
+  def bulkFlow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Seq[Message[ElasticRecord]], Seq[Message[ElasticRecord]], NotUsed] = {
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
     val sinkConfig = sinkContext.config.mapTo[ElasticSearchSinkMetaBean]
-    val bind = addressBind.getOrElse(sinkKey)
+    val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new ElasticSearchBulkSink(
       parallelism = sinkConfig.parallelism,
@@ -61,7 +61,7 @@ object ElasticSearch {
         (_, _) ⇒
           center.context.unRegister(sinkKey, bind)
           Future.successful(Done)
-      })).addAttributes(Attributes(TeleporterAttribute.SupervisionStrategy(sinkKey, sinkContext.config)))
+      })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
   }
 
   def address(key: String)(implicit center: TeleporterCenter): AutoCloseClientRef[TransportClient] = {
@@ -105,7 +105,7 @@ class ElasticSearchSink(parallelism: Int,
                         _close: TransportClient ⇒ Future[Done])
   extends CommonSinkAsyncUnordered[TransportClient, Message[ElasticRecord], Message[ElasticRecord]]("kafka.sink", parallelism) {
 
-  override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttribute.BlockingDispatcher
+  override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 
   override def create(executionContext: ExecutionContext): Future[TransportClient] = _create()
 
@@ -131,7 +131,7 @@ class ElasticSearchBulkSink(parallelism: Int,
                             _close: (TransportClient, ExecutionContext) ⇒ Future[Done])
   extends CommonSinkAsyncUnordered[TransportClient, Seq[Message[ElasticRecord]], Seq[Message[ElasticRecord]]]("kafka.sink", parallelism) {
 
-  override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttribute.BlockingDispatcher
+  override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 
   override def create(ec: ExecutionContext): Future[TransportClient] = _create(ec)
 

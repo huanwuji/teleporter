@@ -3,12 +3,16 @@
 package teleporter.integration.cluster.rpc.fbs;
 
 public final class Role {
-  private Role() { }
-  public static final byte Request = 0;
-  public static final byte Response = 1;
+    private Role() {
+    }
 
-  public static final String[] names = { "Request", "Response", };
+    public static final byte Request = 0;
+    public static final byte Response = 1;
 
-  public static String name(int e) { return names[e]; }
+    public static final String[] names = {"Request", "Response",};
+
+    public static String name(int e) {
+        return names[e];
+    }
 }
 

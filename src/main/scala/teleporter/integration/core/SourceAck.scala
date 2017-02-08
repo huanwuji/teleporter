@@ -21,9 +21,9 @@ import scala.util.control.NonFatal
   * date 2016/12/23.
   */
 object SourceAckMetaBean {
-  val FTransaction = "transaction"
+  val FAck = "ack"
   val FChannelSize = "channelSize"
-  val FBatchSize = "batchSize"
+  val FBatchCoordinateCommitNum = "batchCoordinateCommitNum"
   val FCacheSize = "cacheSize"
   val FMaxAge = "maxAge"
 }
@@ -32,15 +32,15 @@ class SourceAckMetaBean(override val underlying: Map[String, Any]) extends Sourc
 
   import SourceAckMetaBean._
 
-  def transaction: MapBean = client[MapBean](FTransaction)
+  def ack: MapBean = apply[MapBean](FAck)
 
-  def channelSize: Int = transaction.get[Int](FChannelSize).getOrElse(1)
+  def channelSize: Int = ack.get[Int](FChannelSize).getOrElse(1)
 
-  def batchSize: Int = transaction.get[Int](FBatchSize).getOrElse(512)
+  def batchCoordinateCommitNum: Int = ack.get[Int](FBatchCoordinateCommitNum).getOrElse(512)
 
-  def cacheSize: Int = transaction.get[Int](FCacheSize).getOrElse(1024)
+  def cacheSize: Int = ack.get[Int](FCacheSize).getOrElse(1024)
 
-  def maxAge: Duration = transaction.get[Duration](FMaxAge).getOrElse(2.minutes)
+  def maxAge: Duration = ack.get[Duration](FMaxAge).getOrElse(2.minutes)
 }
 
 case class ConfirmData(data: Any, created: Long)
@@ -51,14 +51,14 @@ class BitSets(bitSets: Array[mutable.BitSet]) {
   }
 
   def apply(idx: Int, channel: Int): Boolean = {
-    !bitSets.exists(_ (idx) == false)
+    bitSets(channel)(idx)
   }
 
   def +=(idx: Int): Unit = bitSets.foreach(_ += idx)
 
   def -=(idx: Int, channel: Int): mutable.BitSet = bitSets(channel) -= idx
 
-  def update(idx: Int, channel: Int): Unit = {
+  def +=(idx: Int, channel: Int): Unit = {
     bitSets(channel) += idx
   }
 }
@@ -70,22 +70,19 @@ object BitSets {
 class RingPool(size: Int, channelSize: Int) extends Logging {
   val bitSets: BitSets = BitSets(size, channelSize)
   val elements: Array[ConfirmData] = new Array(size)
-  private val usedCursor: AtomicLong = new AtomicLong(-1)
+  private val usedCursor: AtomicLong = new AtomicLong(0)
   private val freeSpace: AtomicInteger = new AtomicInteger(size)
   private var canConfirmedCursor: Long = 0
-  private var confirmedCursor: Long = -1
-
+  private var confirmedCursor: Long = 0
 
   def add(addElem: Long ⇒ Any): Long = {
-    if (freeSpace.get() > 0) {
-      val currCursor = usedCursor.incrementAndGet()
-      val ringIdx = (currCursor % size).toInt
-      bitSets += ringIdx
-      elements.update(ringIdx, ConfirmData(addElem(currCursor), System.currentTimeMillis()))
-      currCursor
-    } else {
-      -1
-    }
+    require(freeSpace.get() > 0, "Having no space to add")
+    val currCursor = usedCursor.incrementAndGet()
+    val ringIdx = (currCursor % size).toInt
+    bitSets += ringIdx
+    freeSpace.decrementAndGet()
+    elements.update(ringIdx, ConfirmData(addElem(currCursor), System.currentTimeMillis()))
+    currCursor
   }
 
   def remove(idx: Long, channel: Int): Unit = {
@@ -96,7 +93,6 @@ class RingPool(size: Int, channelSize: Int) extends Logging {
     if (bitSets(ringIdx, channel)) {
       bitSets -= (ringIdx, channel)
       if (bitSets(ringIdx)) {
-        freeSpace.incrementAndGet()
         elements.update(ringIdx, null)
         canConfirmed
       }
@@ -119,9 +115,19 @@ class RingPool(size: Int, channelSize: Int) extends Logging {
 
   def unConfirmedSize: Long = usedCursor.get() - confirmedCursor
 
-  def confirmed(): Unit = confirmedCursor = canConfirmedCursor
+  def confirmed(): Unit = confirmed(canConfirmedCursor)
 
-  def isFull: Boolean = freeSpace.compareAndSet(0, 0)
+  def confirmed(confirmCursor: Long): Unit = {
+    require(confirmCursor <= canConfirmed, s"Confirm cursor must less then canConfirmed, $confirmCursor, $canConfirmed")
+    if (confirmCursor > this.confirmedCursor) {
+      freeSpace.addAndGet((confirmCursor - this.confirmedCursor).toInt)
+      confirmedCursor = confirmCursor
+    } else {
+      logger.debug(s"confirmCursor:$confirmCursor was great than ${this.confirmedCursor}")
+    }
+  }
+
+  def remainingCapacity(): Int = freeSpace.get()
 }
 
 object RingPool {
@@ -131,17 +137,17 @@ object RingPool {
 case class SourceAckConfig(
                             channelSize: Int,
                             cacheSize: Int,
-                            batchSize: Int,
+                            batchCoordinateCommitNum: Int,
                             maxAge: Duration)
 
 object SourceAckConfig {
   def apply(config: MapBean): SourceAckConfig = {
-    val ringMetaBean = config.mapTo[SourceAckMetaBean]
+    val ackMetaBean = config.mapTo[SourceAckMetaBean]
     SourceAckConfig(
-      channelSize = ringMetaBean.channelSize,
-      cacheSize = ringMetaBean.cacheSize,
-      batchSize = ringMetaBean.batchSize,
-      maxAge = ringMetaBean.maxAge
+      channelSize = ackMetaBean.channelSize,
+      cacheSize = ackMetaBean.cacheSize,
+      batchCoordinateCommitNum = ackMetaBean.batchCoordinateCommitNum,
+      maxAge = ackMetaBean.maxAge
     )
   }
 }
@@ -200,28 +206,32 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
       private var lastCoordinate: XY = _
       var self: StageActor = _
       val confirmed: AsyncCallback[TId] = getAsyncCallback[TId](tId ⇒ self.ref ! tId)
-      var expiredMessages: Iterator[AckMessage[XY, T]] = _
+      var expiredMessages: Iterator[AckMessage[XY, T]] = Iterator.empty
       var lastCheck: Long = _
 
       @scala.throws[Exception](classOf[Exception])
       override def preStart(): Unit = {
         ringPool = RingPool(config.cacheSize, config.channelSize)
+        var batchCoordinateCommitNum = 0
         self = getStageActor {
           case (_, tId: TId) ⇒
             ringPool.remove(tId.seqNr, tId.channelId)
-            if (ringPool.canConfirmedSize > config.batchSize) {
-              val canConfirmedIdx = ringPool.canConfirmed
-              var latestCoordinate: XY = coordinates.head._2
-              while (coordinates.head._1 < canConfirmedIdx) {
-                latestCoordinate = coordinates.dequeue()._2
-              }
-              commit(lastCoordinate)
+            val canConfirmedIdx = ringPool.canConfirmed
+            var latestCoordinate = coordinates.head
+            while (coordinates.head._1 < canConfirmedIdx) {
+              latestCoordinate = coordinates.dequeue()
+              batchCoordinateCommitNum += 1
+            }
+            if (batchCoordinateCommitNum >= config.batchCoordinateCommitNum) {
+              commit(latestCoordinate._2)
+              ringPool.confirmed(latestCoordinate._1)
+              batchCoordinateCommitNum = 0
             }
         }
       }
 
       override def onPush(): Unit = {
-        if (ringPool.isFull) {
+        if (ringPool.remainingCapacity() == 0) {
           if (!expiredMessages.hasNext) {
             expired()
           }
@@ -237,6 +247,7 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
           val seqNr = ringPool.add { idx ⇒
             val ackMessage = AckMessage(id = TId(id, idx), coordinate = elem.coordinate, data = elem.data, confirmed = confirmed)
             push(out, ackMessage)
+            ackMessage
           }
           if (lastCoordinate != coordinates) {
             lastCoordinate = elem.coordinate
@@ -254,7 +265,7 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
 
       private def expired(): Unit = {
         expiredMessages = ringPool.elements
-          .filter(System.currentTimeMillis() - _.created > config.maxAge.toMillis)
+          .filter(x ⇒ x != null && System.currentTimeMillis() - x.created > config.maxAge.toMillis)
           .map(_.data.asInstanceOf[AckMessage[XY, T]]).toIterator
       }
 

@@ -17,7 +17,7 @@ class CacheThreadPoolExecutorConfigurator(config: Config, prerequisites: Dispatc
 
 class SizeScaleThreadPoolExecutorConfigurator(config: Config, prerequisites: DispatcherPrerequisites) extends ExecutorServiceConfigurator(config, prerequisites) {
 
-  val sizeScaleThreadPoolConfig: SizeScaleThreadPoolConfig = createThreadPoolConfig(config, prerequisites)
+  val sizeScaleThreadPoolConfig: SizeScaleThreadPoolConfig = createThreadPoolConfig(config.getConfig("size-scale-pool-executor"), prerequisites)
 
   protected def createThreadPoolConfig(config: Config, prerequisites: DispatcherPrerequisites): SizeScaleThreadPoolConfig = {
     import akka.util.Helpers.ConfigOps

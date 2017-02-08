@@ -1,7 +1,7 @@
 package teleporter.integration.component
 
 import akka.Done
-import akka.stream.TeleporterAttribute.SupervisionStrategy
+import akka.stream.TeleporterAttributes.SupervisionStrategy
 import akka.stream._
 import akka.stream.stage._
 import com.google.common.collect.EvictingQueue
@@ -9,7 +9,7 @@ import teleporter.integration
 import teleporter.integration.supervision.SinkDecider
 
 import scala.concurrent.duration.{Duration, FiniteDuration}
-import scala.concurrent.{ExecutionContext, ExecutionContextExecutor, Future, Promise}
+import scala.concurrent.{ExecutionContext, ExecutionContextExecutor, Future}
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
@@ -59,7 +59,6 @@ abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape
       def writeData(elem: In): Unit = {
         try {
           push(out, write(client, elem))
-          if (!isClosed(in)) pull(in)
           retries = 0
           lastElem = None
         } catch {
@@ -98,35 +97,46 @@ abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape
       override protected def onTimer(timerKey: Any): Unit = {
         timerKey match {
           case (ex: Throwable, d: integration.supervision.Supervision.Directive) ⇒ decide(ex, d)
-          case _ ⇒ log.warning(s"Unmatched $timerKey")
+          case _ ⇒ log.warning(s"Unmatched timeKey: $timerKey")
         }
       }
 
-      override def supervisionStrategy: SupervisionStrategy = inheritedAttributes.get[SupervisionStrategy].getOrElse(TeleporterAttribute.emptySupervisionStrategy)
+      override def supervisionStrategy: SupervisionStrategy = inheritedAttributes.get[SupervisionStrategy].getOrElse(TeleporterAttributes.emptySupervisionStrategy)
 
       override def teleporterFailure(ex: Throwable): Unit = {
-        retries += 1
+        super.teleporterFailure(ex)
         matchRule(ex).foreach {
           rule ⇒
             if (retries < rule.directive.retries) {
               rule.directive.delay match {
                 case Duration.Zero ⇒ decide(ex, rule.directive)
-                case d: FiniteDuration ⇒ scheduleOnce(rule.directive, d)
+                case d: FiniteDuration ⇒ scheduleOnce((ex, rule.directive), d)
                 case _ ⇒
               }
+              retries += 1
             } else {
               rule.directive.next.foreach(decide(ex, _))
             }
         }
       }
 
-      override def reload(ex: Throwable): Unit = createClient()
+      override def reload(ex: Throwable): Unit = {
+        close(client)
+        createClient()
+        retry(ex)
+      }
 
-      override def retry(ex: Throwable): Unit = writeData(lastElem.get)
+      override def retry(ex: Throwable): Unit = lastElem match {
+        case Some(elem) ⇒ writeData(elem)
+        case None ⇒
+      }
 
       override def resume(ex: Throwable): Unit = if (!isClosed(in)) pull(in)
 
-      override def stop(ex: Throwable): Unit = failStage(ex)
+      override def stop(ex: Throwable): Unit = {
+        close(client)
+        failStage(ex)
+      }
 
       setHandlers(in, out, this)
     }
@@ -150,35 +160,34 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
   @scala.throws[Exception](classOf[Exception])
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
     new TimerGraphStageLogic(shape) with SinkDecider with OutHandler with InHandler with StageLogging {
-      implicit val executionContext: ExecutionContextExecutor = {
-        val mater = materializer.asInstanceOf[ActorMaterializer]
-        val dispatcherAttr = inheritedAttributes.getAttribute(classOf[TeleporterAttribute.Dispatcher])
-        if (dispatcherAttr.isPresent) {
-          mater.system.dispatchers.lookup(dispatcherAttr.get().dispatcher)
-        } else {
-          mater.executionContext
-        }
-      }
+      implicit var executionContext: ExecutionContextExecutor = _
       private var inFlight = 0
       private var retriesBuffer: EvictingQueue[In] = _
       private var buffer: EvictingQueue[Out] = _
-      var resource: Promise[C] = Promise[C]()
       var client: C = _
       var retries: Int = _
-      var retrying: Boolean = false
 
       private[this] def todo = inFlight + buffer.size()
 
       override def preStart(): Unit = {
+        executionContext = {
+          val mater = materializer.asInstanceOf[ActorMaterializer]
+          val dispatcherAttr = inheritedAttributes.getAttribute(classOf[TeleporterAttributes.Dispatcher])
+          if (dispatcherAttr.isPresent) {
+            mater.system.dispatchers.lookup(dispatcherAttr.get().dispatcher)
+          } else {
+            mater.executionContext
+          }
+        }
         buffer = EvictingQueue.create(parallelism)
         retriesBuffer = EvictingQueue.create(parallelism)
-        createClient(false)
+        createClient(true)
       }
 
       private def createClient(withPull: Boolean): Unit = {
         val cb = getAsyncCallback[Try[C]] {
           case scala.util.Success(res) ⇒
-            resource.success(res)
+            client = res
             if (withPull) onPull()
           case scala.util.Failure(t) ⇒ teleporterFailure(t)
         }
@@ -189,10 +198,11 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
         }
       }
 
-      def futureCompleted(result: Try[Out]): Unit = {
-        retries = 0
-        result match {
+      def futureCompleted(result: (In, Try[Out])): Unit = {
+        val (inElem, r) = result
+        r match {
           case Success(elem) if elem != null ⇒
+            retries = 0
             inFlight -= 1
             if (isAvailable(out)) {
               if (!hasBeenPulled(in)) tryPull(in)
@@ -200,28 +210,29 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
             } else buffer.add(elem)
           case other ⇒
             val ex = other match {
-              case Failure(t) ⇒ t
-              case Success(s) if s == null ⇒ throw new NullPointerException("result can't be null")
+              case Failure(t) ⇒ retriesBuffer.add(inElem); t
+              case Success(s) if s == null ⇒ new NullPointerException("result can't be null")
             }
             teleporterFailure(ex)
         }
       }
 
       private val futureCB = getAsyncCallback(futureCompleted)
-      private val invokeFutureCB: Try[Out] ⇒ Unit = futureCB.invoke
+      private val invokeFutureCB: ((In, Try[Out])) ⇒ Unit = futureCB.invoke
 
       override def onPush(): Unit = {
         try {
-          val elem = if (retrying && !retriesBuffer.isEmpty) {
-            val retryElem = retriesBuffer.remove()
-            retrying = false
-            retryElem
-          } else grab(in)
+          val elem = if (!retriesBuffer.isEmpty) {
+            retriesBuffer.remove()
+          } else {
+            val grabElem = grab(in)
+            inFlight += 1
+            grabElem
+          }
           val future = write(client, elem, executionContext)
-          inFlight += 1
           future.value match {
-            case None ⇒ future.onComplete(invokeFutureCB)
-            case Some(v) ⇒ futureCompleted(v)
+            case None ⇒ future.onComplete(invokeFutureCB(elem, _))
+            case Some(v) ⇒ futureCompleted((elem, v))
           }
         } catch {
           case NonFatal(ex) ⇒ teleporterFailure(ex)
@@ -268,33 +279,35 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
       override protected def onTimer(timerKey: Any): Unit = {
         timerKey match {
           case (ex: Throwable, d: integration.supervision.Supervision.Directive) ⇒ decide(ex, d)
-          case _ ⇒ log.warning(s"Unmatched $timerKey")
+          case _ ⇒ log.warning(s"Unmatched timerKey: $timerKey")
         }
       }
 
-      override def supervisionStrategy: SupervisionStrategy = inheritedAttributes.get[SupervisionStrategy].getOrElse(TeleporterAttribute.emptySupervisionStrategy)
+      override def supervisionStrategy: SupervisionStrategy = inheritedAttributes.get[SupervisionStrategy].getOrElse(TeleporterAttributes.emptySupervisionStrategy)
 
       override def teleporterFailure(ex: Throwable): Unit = {
-        retries += 1
-        matchRule(ex).foreach {
-          rule ⇒
-            if (retries < rule.directive.retries) {
-              rule.directive.delay match {
-                case Duration.Zero ⇒ decide(ex, rule.directive)
-                case d: FiniteDuration ⇒ scheduleOnce(rule.directive, d)
-                case _ ⇒
-              }
-            } else {
-              rule.directive.next.foreach(decide(ex, _))
+        super.teleporterFailure(ex)
+        matchRule(ex).foreach { rule ⇒
+          if (retries / retriesBuffer.size() < rule.directive.retries || rule.directive.retries == 0) {
+            rule.directive.delay match {
+              case Duration.Zero ⇒ decide(ex, rule.directive)
+              case d: FiniteDuration ⇒ scheduleOnce((ex, rule.directive), d)
+              case _ ⇒
             }
+            retries += 1
+          } else {
+            rule.directive.next.foreach(decide(ex, _))
+          }
         }
       }
 
-      override def reload(ex: Throwable): Unit = preStart()
+      override def reload(ex: Throwable): Unit = {
+        close(client, executionContext)
+        preStart()
+      }
 
       override def retry(ex: Throwable): Unit = {
-        retrying = true
-        onPush()
+        if (!retriesBuffer.isEmpty) teleporterFailure(ex) //not good
       }
 
       override def resume(ex: Throwable): Unit = {
@@ -303,6 +316,9 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
         else if (!hasBeenPulled(in)) tryPull(in)
       }
 
-      override def stop(ex: Throwable): Unit = failStage(ex)
+      override def stop(ex: Throwable): Unit = {
+        close(client, executionContext)
+        failStage(ex)
+      }
     }
 }

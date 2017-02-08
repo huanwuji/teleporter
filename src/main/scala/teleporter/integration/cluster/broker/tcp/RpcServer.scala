@@ -256,7 +256,7 @@ object RpcServer extends Logging {
         val eventReceiver = system.actorOf(Props(classOf[EventReceiveActor], configService, runtimeService, configNotify, connectionKeepers, eventListener))
         try {
           Source.actorRef[TeleporterEvent[_ <: EventBody]](1000, OverflowStrategy.fail)
-            .log("server-response")
+            .log("server-send")
             .withAttributes(Attributes.logLevels(onElement = Logging.InfoLevel))
             .map(event ⇒ ByteString(TeleporterEvent.toArray(event)))
             .watchTermination() { case (ref, fu) ⇒ eventReceiver ! RegisterSender(ref); fu }
