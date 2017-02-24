@@ -92,18 +92,20 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
   }
 
   def start(key: String): Unit = {
-    center.context.getContext[StreamContext](key).config.cronOption match {
-      case Some(cron) if cron.nonEmpty ⇒
-        self ! CronCommand(Streams.Start(key), cron)
-      case _ ⇒
-        loadTemplate(key) match {
-          case Some(result) ⇒
-            result.onComplete {
-              case Success(template) ⇒ self ! ExecuteStream(key, template)
-              case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
-            }
-          case None ⇒ logger.warn(s"Can't load template $key")
-        }
+    center.context.getContextOption[StreamContext](key).foreach { stream ⇒
+      stream.config.cronOption match {
+        case Some(cron) if cron.nonEmpty ⇒
+          self ! CronCommand(Streams.Start(key), cron)
+        case _ ⇒
+          loadTemplate(key) match {
+            case Some(result) ⇒
+              result.onComplete {
+                case Success(template) ⇒ self ! ExecuteStream(key, template)
+                case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
+              }
+            case None ⇒ logger.warn(s"Can't load template $key")
+          }
+      }
     }
   }
 
@@ -127,12 +129,15 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
     logger.info(s"$key stream will executed")
     val result = streamLogic(key, center)
     streamStates += key → StreamState(result)
-    result._2.map { _ ⇒
-      center.context.unRegister(key)
-    } onComplete {
-      case Success(v) ⇒ logger.info(s"$key was completed, $v")
-      case Failure(e) ⇒ logger.error(s"$key execute failed", e)
-    }
+    result._2.andThen { case _ ⇒ center.context.unRegister(key) }
+      .onComplete {
+        case Success(v) ⇒
+          center.client.streamStatus(key, StreamStatus.COMPLETE)
+          logger.info(s"$key was completed, $v")
+        case Failure(e) ⇒
+          center.client.streamStatus(key, StreamStatus.FAILURE)
+          logger.warn(s"$key execute failed", e)
+      }
   }
 
   private def loadTemplate(streamId: String, cache: Boolean = true): Option[Future[String]] = {

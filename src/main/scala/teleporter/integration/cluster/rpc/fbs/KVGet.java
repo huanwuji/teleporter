@@ -5,53 +5,29 @@ package teleporter.integration.cluster.rpc.fbs;
 import java.nio.*;
 import java.lang.*;
 import java.util.*;
-
 import com.google.flatbuffers.*;
 
 @SuppressWarnings("unused")
 public final class KVGet extends Table {
-    public static KVGet getRootAsKVGet(ByteBuffer _bb) {
-        return getRootAsKVGet(_bb, new KVGet());
-    }
+  public static KVGet getRootAsKVGet(ByteBuffer _bb) { return getRootAsKVGet(_bb, new KVGet()); }
+  public static KVGet getRootAsKVGet(ByteBuffer _bb, KVGet obj) { _bb.order(ByteOrder.LITTLE_ENDIAN); return (obj.__init(_bb.getInt(_bb.position()) + _bb.position(), _bb)); }
+  public KVGet __init(int _i, ByteBuffer _bb) { bb_pos = _i; bb = _bb; return this; }
 
-    public static KVGet getRootAsKVGet(ByteBuffer _bb, KVGet obj) {
-        _bb.order(ByteOrder.LITTLE_ENDIAN);
-        return (obj.__init(_bb.getInt(_bb.position()) + _bb.position(), _bb));
-    }
+  public String key() { int o = __offset(4); return o != 0 ? __string(o + bb_pos) : null; }
+  public ByteBuffer keyAsByteBuffer() { return __vector_as_bytebuffer(4, 1); }
 
-    public KVGet __init(int _i, ByteBuffer _bb) {
-        bb_pos = _i;
-        bb = _bb;
-        return this;
-    }
+  public static int createKVGet(FlatBufferBuilder builder,
+      int keyOffset) {
+    builder.startObject(1);
+    KVGet.addKey(builder, keyOffset);
+    return KVGet.endKVGet(builder);
+  }
 
-    public String key() {
-        int o = __offset(4);
-        return o != 0 ? __string(o + bb_pos) : null;
-    }
-
-    public ByteBuffer keyAsByteBuffer() {
-        return __vector_as_bytebuffer(4, 1);
-    }
-
-    public static int createKVGet(FlatBufferBuilder builder,
-                                  int keyOffset) {
-        builder.startObject(1);
-        KVGet.addKey(builder, keyOffset);
-        return KVGet.endKVGet(builder);
-    }
-
-    public static void startKVGet(FlatBufferBuilder builder) {
-        builder.startObject(1);
-    }
-
-    public static void addKey(FlatBufferBuilder builder, int keyOffset) {
-        builder.addOffset(0, keyOffset, 0);
-    }
-
-    public static int endKVGet(FlatBufferBuilder builder) {
-        int o = builder.endObject();
-        return o;
-    }
+  public static void startKVGet(FlatBufferBuilder builder) { builder.startObject(1); }
+  public static void addKey(FlatBufferBuilder builder, int keyOffset) { builder.addOffset(0, keyOffset, 0); }
+  public static int endKVGet(FlatBufferBuilder builder) {
+    int o = builder.endObject();
+    return o;
+  }
 }
 

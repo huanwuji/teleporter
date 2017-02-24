@@ -29,10 +29,10 @@ class RingPoolTest extends FunSuite with Matchers {
     }
     ringPool.remainingCapacity() should be(5)
     (1 to confirming) foreach {
-      idx ⇒ ringPool.remove(idx, 1)
+      idx ⇒ ringPool.remove(idx, 0)
     }
     ringPool.remainingCapacity() should be(5)
-    ringPool.canConfirmed should be(confirming)
+    ringPool.canConfirmCursor should be(confirming)
     ringPool.canConfirmedSize should be(confirming)
     ringPool.unConfirmedSize should be(25)
     var confirmed = 10
@@ -46,7 +46,7 @@ class RingPoolTest extends FunSuite with Matchers {
     }
     ringPool.remainingCapacity() should be(size - useSize + confirmed - 10)
     (confirming to confirming + 5) foreach {
-      idx ⇒ ringPool.remove(idx, 1)
+      idx ⇒ ringPool.remove(idx, 0)
     }
     ringPool.remainingCapacity() should be(10)
   }

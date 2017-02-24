@@ -33,6 +33,7 @@ table RpcEvent {
     eventType:EventType;
     role:Role;
     status:EventStatus;
+    message:string;
     body:[byte];
 }
 

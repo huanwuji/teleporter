@@ -3,18 +3,14 @@
 package teleporter.integration.cluster.rpc.fbs;
 
 public final class Action {
-    private Action() {
-    }
+  private Action() { }
+  public static final byte ADD = 0;
+  public static final byte UPDATE = 1;
+  public static final byte UPSERT = 2;
+  public static final byte REMOVE = 3;
 
-    public static final byte ADD = 0;
-    public static final byte UPDATE = 1;
-    public static final byte UPSERT = 2;
-    public static final byte REMOVE = 3;
+  public static final String[] names = { "ADD", "UPDATE", "UPSERT", "REMOVE", };
 
-    public static final String[] names = {"ADD", "UPDATE", "UPSERT", "REMOVE",};
-
-    public static String name(int e) {
-        return names[e];
-    }
+  public static String name(int e) { return names[e]; }
 }
 

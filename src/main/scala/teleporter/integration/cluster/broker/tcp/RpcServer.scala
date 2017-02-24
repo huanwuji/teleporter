@@ -13,8 +13,8 @@ import teleporter.integration.cluster.broker.PersistentService
 import teleporter.integration.cluster.broker.tcp.EventReceiveActor._
 import teleporter.integration.cluster.rpc.EventBody.ConfigChangeNotify
 import teleporter.integration.cluster.rpc.TeleporterEvent.EventHandle
-import teleporter.integration.cluster.rpc._
 import teleporter.integration.cluster.rpc.fbs.{Action, EventType, Role}
+import teleporter.integration.cluster.rpc.{TeleporterEvent, _}
 import teleporter.integration.utils.EventListener
 
 import scala.collection.concurrent.TrieMap
@@ -55,7 +55,7 @@ class EventReceiveActor(configService: PersistentService,
       runtimeService.put(partition, Version().toJson)
       connectionKeepers.get(instance).foreach { _ ⇒
         eventListener.asyncEvent { seqNr ⇒
-          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.Request,
+          senderRef ! TeleporterEvent.request(seqNr = seqNr, eventType = EventType.ConfigChangeNotify,
             body = ConfigChangeNotify(partition, Action.UPSERT, System.currentTimeMillis()))
         }._2.onComplete {
           case Success(_) ⇒
@@ -68,7 +68,7 @@ class EventReceiveActor(configService: PersistentService,
       runtimeService.delete(partition)
       connectionKeepers.get(instance).foreach { _ ⇒
         eventListener.asyncEvent { seqNr ⇒
-          senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.Request,
+          senderRef ! TeleporterEvent.request(seqNr = seqNr, eventType = EventType.ConfigChangeNotify,
             body = ConfigChangeNotify(partition, Action.REMOVE, System.currentTimeMillis()))
         }._2.onComplete {
           case Success(_) ⇒ runtimeService.delete(Keys.mapping(partition, PARTITION, RUNTIME_PARTITION))
@@ -141,11 +141,11 @@ class EventReceiveActor(configService: PersistentService,
     case (EventType.KVGet, event) ⇒
       val get = event.toBody[EventBody.KVGet]
       val kv = configService(get.key)
-      senderRef ! event.copy(role = Role.Response, body = EventBody.KV(kv.key, kv.value))
+      senderRef ! TeleporterEvent.response(event, body = EventBody.KV(kv.key, kv.value))
     case (EventType.RangeRegexKV, event) ⇒
       val rangeKV = event.toBody[EventBody.RangeRegexKV]
       val kvs = configService.regexRange(rangeKV.key, rangeKV.start, rangeKV.limit)
-      senderRef ! event.copy(role = Role.Response, body = EventBody.KVS(kvs.map(kv ⇒ EventBody.KV(kv.key, kv.value))))
+      senderRef ! TeleporterEvent.response(event, body = EventBody.KVS(kvs.map(kv ⇒ EventBody.KV(kv.key, kv.value))))
     case (EventType.KVSave, event) ⇒
       val kv = event.toBody[EventBody.KV]
       configService.put(key = kv.key, value = kv.value)
@@ -157,9 +157,9 @@ class EventReceiveActor(configService: PersistentService,
     case (EventType.AtomicSaveKV, event) ⇒
       val atomicSave = event.toBody[EventBody.AtomicKV]
       if (configService.atomicPut(atomicSave.key, atomicSave.expect, atomicSave.update)) {
-        senderRef ! TeleporterEvent.success(event)
+        senderRef ! TeleporterEvent.response(event, body = EventBody.KV(atomicSave.key, atomicSave.update))
       } else {
-        senderRef ! TeleporterEvent.failure(event)
+        senderRef ! TeleporterEvent.failure(event, message = s"Atomic key:${atomicSave.key} save conflict!")
       }
     case (EventType.ConfigChangeNotify, event) ⇒
       val notify = event.toBody[ConfigChangeNotify]

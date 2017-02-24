@@ -8,7 +8,7 @@ import teleporter.integration.cluster.broker.PersistentProtocol.{Keys, Tables}
 import teleporter.integration.cluster.broker.tcp.ConnectionKeeper
 import teleporter.integration.cluster.rpc.EventBody.ConfigChangeNotify
 import teleporter.integration.cluster.rpc.TeleporterEvent
-import teleporter.integration.cluster.rpc.fbs.{Action, EventType, Role}
+import teleporter.integration.cluster.rpc.fbs.{Action, EventType}
 
 import scala.collection.concurrent.TrieMap
 
@@ -108,6 +108,6 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
   }
 
   def notifyEvent(key: String, action: Byte): TeleporterEvent[ConfigChangeNotify] =
-    TeleporterEvent(role = Role.Request, eventType = EventType.ConfigChangeNotify,
+    TeleporterEvent.request(eventType = EventType.ConfigChangeNotify,
       body = ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()))
 }

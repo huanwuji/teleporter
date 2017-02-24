@@ -13,7 +13,7 @@ import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.instance.LogTrace.{Check, Line, LogTailer}
 import teleporter.integration.cluster.rpc.EventBody.{LogTailRequest, LogTailResponse}
 import teleporter.integration.cluster.rpc.TeleporterEvent
-import teleporter.integration.cluster.rpc.fbs.{EventType, Role}
+import teleporter.integration.cluster.rpc.fbs.EventType
 import teleporter.integration.component.file.FileTailer
 import teleporter.integration.core.TeleporterCenter
 
@@ -47,7 +47,7 @@ class LogTrace()(implicit center: TeleporterCenter) extends Actor with Logging {
       if (eventQueue.isEmpty) {
         logs += line
       } else {
-        center.brokers ! SendMessage(TeleporterEvent(eventType = EventType.LogTail, role = Role.Response, body = LogTailResponse(s)))
+        center.brokers ! SendMessage(TeleporterEvent.response(eventType = EventType.LogTail, body = LogTailResponse(s)))
         if (eventQueue.nonEmpty) delivery()
       }
     case Check ⇒

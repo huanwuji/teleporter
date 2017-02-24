@@ -13,13 +13,15 @@ import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.rpc.EventBody.{ConfigChangeNotify, KVGet, KVS}
 import teleporter.integration.cluster.rpc._
 import teleporter.integration.cluster.rpc.fbs.{EventStatus, EventType, Role}
-import teleporter.integration.core.TeleporterContext.Upsert
+import teleporter.integration.core.TeleporterConfigActor.LoadStream
+import teleporter.integration.core.TeleporterContext.{Update, Upsert}
 import teleporter.integration.supervision.StreamDecider
-import teleporter.integration.utils.{EventListener, MapBean, MapMetaBean}
+import teleporter.integration.utils.{EventListener, Jackson, MapBean, MapMetaBean}
 
 import scala.collection.JavaConverters._
 import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.util.{Failure, Success}
 
 /**
   * Author: kui.dai
@@ -28,8 +30,6 @@ import scala.concurrent.duration._
 trait ConfigMetaBean extends MapMetaBean with ConfigMetaBeanFields {
 
   def id: Long = apply[Long](FId)
-
-  def name: String = this.apply[String](FName)
 
   def arguments: MapBean = this.get[MapBean](FArguments).getOrElse(MapBean.empty)
 
@@ -40,7 +40,6 @@ trait ConfigMetaBean extends MapMetaBean with ConfigMetaBeanFields {
 
 trait ConfigMetaBeanFields {
   val FId = "id"
-  val FName = "name"
   val FKey = "key"
   val FArguments = "arguments"
   val FExtraKeys = "extraKeys"
@@ -67,6 +66,7 @@ class TaskMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
 object StreamStatus {
   val NORMAL = "NORMAL"
   val REMOVE = "REMOVE"
+  val FAILURE = "FAILURE"
   val COMPLETE = "COMPLETE"
 }
 
@@ -113,9 +113,9 @@ class SourceMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
 
   def addressOption: Option[MapBean] = this.get[MapBean](FAddress)
 
-  def addressKey: String = get[String](FAddress, FAddressKey).filter(_.nonEmpty).orNull
+  def addressKey: String = get[String](FAddress, FAddressKey).orNull
 
-  def addressBind: String = get[String](FAddress, FAddressBind).filter(_.nonEmpty).orNull
+  def addressBind: String = get[String](FAddress, FAddressBind).orNull
 
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
 }
@@ -282,7 +282,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
       val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value)
       val sourceConfig = km.value
       sourceConfig.addressKey match {
-        case x if x != null & x.nonEmpty ⇒
+        case x if x != null ⇒
           for {
             _ ← self ? LoadAddress(sourceConfig.addressKey, trigger = false)
             _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
@@ -304,7 +304,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
         val sourceContext = SourceContext(id = sourceId, key = km.key, config = km.value)
         val sourceConfig = km.value
         sourceConfig.addressKey match {
-          case x if x != null & x.nonEmpty ⇒
+          case x if x != null ⇒
             for {
               _ ← self ? LoadAddress(sourceConfig.addressKey, trigger = false)
               _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
@@ -327,7 +327,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
       val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value)
       val sinkConfig = km.value
       sinkConfig.addressKey match {
-        case x if x != null & x.nonEmpty ⇒
+        case x if x != null ⇒
           for {
             _ ← self ? LoadAddress(sinkConfig.addressKey, trigger = false)
             _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
@@ -349,7 +349,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
         val sinkContext = SinkContext(id = sinkId, key = km.key, config = km.value)
         val sinkConfig = km.value
         sinkConfig.addressKey match {
-          case x if x != null & x.nonEmpty ⇒
+          case x if x != null ⇒
             for {
               _ ← self ? LoadAddress(sinkConfig.addressKey, trigger = false)
               _ ← Futures.sequence(km.value.extraKeys.toMap.map { case (_, v: String) ⇒ self ? LoadExtra(v, trigger) }
@@ -395,16 +395,35 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
   }
 }
 
-trait TeleporterConfigClient {
+trait TeleporterConfigClient extends Logging {
   val center: TeleporterCenter
 
   import center.system.dispatcher
+
+  def streamStatus(key: String, status: String): Unit = {
+    val context = center.context.getContext[StreamContext](key)
+    val streamConfig = context.config
+    val targetStreamConfig = streamConfig.status(status)
+    this.atomicSave(key,
+      Jackson.mapper.writeValueAsString(streamConfig.toMap),
+      Jackson.mapper.writeValueAsString(targetStreamConfig)
+    ).onComplete {
+      case Success(value) ⇒
+        if (value) {
+          center.context.ref ! Update(context.copy(config = MapMetaBean[StreamMetaBean](targetStreamConfig)))
+        } else {
+          logger.warn(s"Alter $key status failed by status $status, will reload stream")
+          center.configRef ! LoadStream(key)
+        }
+      case Failure(ex) ⇒ logger.warn(ex.getMessage, ex)
+    }
+  }
 
   def getConfig(key: String): Future[KeyValue] = {
     require(key.nonEmpty, "Key can't empty to load")
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVGet, role = Role.Request, body = KVGet(key))
+        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVGet, body = KVGet(key))
       )
     }._2.map(e ⇒ e.toBody[EventBody.KV].keyValue)
   }
@@ -413,7 +432,7 @@ trait TeleporterConfigClient {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent(seqNr = seqNr, eventType = EventType.RangeRegexKV, role = Role.Request,
-          body = EventBody.RangeRegexKV(key = key, start = start, limit = limit))
+          body = Some(EventBody.RangeRegexKV(key = key, start = start, limit = limit)))
       )
     }._2.map(e ⇒ e.toBody[KVS].kvs.map(kv ⇒ KeyValue(kv.key, kv.value)))
   }
@@ -421,7 +440,7 @@ trait TeleporterConfigClient {
   def save(key: String, value: String): Future[Done] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVSave, role = Role.Request,
+        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVSave,
           body = EventBody.KV(key = key, value = value))
       )
     }._2.map {
@@ -433,19 +452,22 @@ trait TeleporterConfigClient {
   def atomicSave(key: String, expect: String, update: String): Future[Boolean] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVSave, role = Role.Request,
+        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.AtomicSaveKV,
           body = EventBody.AtomicKV(key = key, expect = expect, update = update))
       )
     }._2.map {
-      case e if e.status == EventStatus.Success ⇒ true
-      case _ ⇒ false
+      e ⇒
+        if (e.status == EventStatus.Failure) {
+          logger.warn(s"$key save failed, ${e.message}")
+        }
+        e.status == EventStatus.Success
     }
   }
 
   def remove(key: String): Future[Done] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.KVRemove, role = Role.Request,
+        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVRemove,
           body = EventBody.KVRemove(key = key))
       )
     }._2.map {
@@ -457,7 +479,7 @@ trait TeleporterConfigClient {
   def notify(key: String, action: Byte): Future[Done] = {
     center.eventListener.asyncEvent { seqNr ⇒
       center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.ConfigChangeNotify, role = Role.Request,
+        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.ConfigChangeNotify,
           body = ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()))
       )
     }._2.map {

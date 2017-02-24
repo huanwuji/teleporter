@@ -41,7 +41,7 @@ trait Conversions {
 
   def asNonEmptyString(v: Any): Option[String] = v match {
     case s: String if s.isEmpty ⇒ None
-    case x ⇒ Some(x.toString)
+    case x ⇒ Option(x.toString)
   }
 
   def asDuration(v: Any): Option[Duration] = v match {
@@ -126,7 +126,7 @@ trait Converters extends Conversions {
   }
 
   implicit object StringConverter extends Converter[String] {
-    override def to(v: Any): Option[String] = Some(asString(v))
+    override def to(v: Any): Option[String] = asNonEmptyString(v)
   }
 
   implicit object BooleanConverter extends Converter[Boolean] {

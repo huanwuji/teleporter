@@ -21,16 +21,12 @@
     <tbody>
     <tr>
       <th>key</th>
-      <th>name</th>
       <th>address</th>
       <th><a class="btn btn-primary" [routerLink]="['add']">add</a></th>
     </tr>
     <tr *ngFor="let kb of kbs">
       <td>
         <a [routerLink]="[kb.value.key]">{{kb.value.key}}</a>
-      </td>
-      <td>
-        {{kb.value.name}}
       </td>
       <td>
         <a *ngIf="kb.value.address && kb.value.address.key" [routerLink]="[kb.value.address.key]">{{kb.value.address.key}}</a>

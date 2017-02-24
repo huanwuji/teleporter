@@ -7,7 +7,6 @@ import {FormItemBase, TextboxFormItem, DynamicGroupFormItem} from "../../dynamic
 export interface Variable extends Identity {
   ns?: string;
   key?: string;
-  name?: string;
   arguments?: string;
   runtime?: Object;
 }
@@ -30,11 +29,6 @@ export class VariableService extends ConfigService<Variable> {
       new TextboxFormItem({
         key: 'key',
         label: 'key',
-        required: true
-      }),
-      new TextboxFormItem({
-        key: 'name',
-        label: 'name',
         required: true
       }),
       new DynamicGroupFormItem({

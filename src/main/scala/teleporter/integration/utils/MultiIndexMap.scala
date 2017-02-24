@@ -71,9 +71,15 @@ class TwoIndexMap[K1, V](k1Map: mutable.Map[K1, V], k2Map: ConcurrentSkipListMap
     k1Map.put(biMap.applyValue(key2), m)
   }
 
-  def applyKey1(key: K1): V = getKey1(key).get
+  def applyKey1(key: K1): V = getKey1(key) match {
+    case None ⇒ throw new NoSuchElementException("key not found: " + key)
+    case Some(value) ⇒ value
+  }
 
-  def applyKey2(key: String): V = getKey2(key).get
+  def applyKey2(key: String): V = getKey2(key) match {
+    case None ⇒ throw new NoSuchElementException("key not found: " + key)
+    case Some(value) ⇒ value
+  }
 
   def getKey1(key: K1): Option[V] = k1Map.get(key)
 

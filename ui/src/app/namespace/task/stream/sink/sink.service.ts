@@ -12,7 +12,6 @@ import {
 
 export interface Sink extends Identity {
   key?: string;
-  name?: string;
   category?: string;
   address?: string;
   errorRules?: string;
@@ -40,11 +39,6 @@ export class SinkService extends ConfigService<Sink> {
         label: 'key',
         required: true
       }),
-      new TextboxFormItem({
-        key: 'name',
-        label: 'name',
-        required: true
-      }),
       new GroupFormItem({
         key: 'address',
         label: 'address',
@@ -59,7 +53,8 @@ export class SinkService extends ConfigService<Sink> {
       }),
       new ArrayFormItem({
         key: 'errorRules',
-        label: 'errorRules'
+        label: 'errorRules',
+        placeholder: 'regex => reload|retry|resume|stop(delay = 1.seconds, retries = 1, next = stop)'
       }),
       new GroupFormItem({
         key: 'client',
@@ -85,6 +80,8 @@ export class SinkService extends ConfigService<Sink> {
         return this.getKuduItems();
       case 'hdfs':
         return this.getHdfsItems();
+      case 'file':
+        return this.getFileItems();
       default:
         throw new Error(`UnMatch sink category ${category}`)
     }
@@ -139,6 +136,19 @@ export class SinkService extends ConfigService<Sink> {
     return [
       new TextboxFormItem({key: 'path', label: 'path'}),
       new TextboxFormItem({key: 'overwrite', label: 'overwrite', value: true})
+    ];
+  }
+
+  private getFileItems(): FormItemBase<any>[] {
+    return [
+      new TextboxFormItem({key: 'path', label: 'path'}),
+      new TextboxFormItem({key: 'offset', label: 'offset'}),
+      new TextboxFormItem({
+        key: 'openOptions',
+        label: 'openOptions',
+        placeholder: 'READ, WRITE, APPEND, TRUNCATE_EXISTING, CREATE, CREATE_NEW, DELETE_ON_CLOSE, SPARSE, SYNC, DSYNC)',
+        value: 'CREATE,WRITE,APPEND'
+      })
     ];
   }
 }

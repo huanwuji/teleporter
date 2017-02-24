@@ -2,12 +2,17 @@ import {Injectable} from "@angular/core";
 import {Http} from "@angular/http";
 import "rxjs/add/operator/toPromise";
 import {ConfigService, RuntimeService, KeyBean, Identity} from "../../rest.servcie";
-import {FormItemBase, TextboxFormItem, DynamicGroupFormItem, GroupFormItem} from "../../dynamic/form/form-item";
+import {
+  FormItemBase,
+  TextboxFormItem,
+  DynamicGroupFormItem,
+  GroupFormItem,
+  TextareaFormItem
+} from "../../dynamic/form/form-item";
 
 export interface Address extends Identity {
   ns?: string;
   key?: string;
-  name?: string;
   category?: any;
   client?: any;
   arguments?: string;
@@ -39,11 +44,6 @@ export class AddressService extends ConfigService<Address> {
         label: 'key',
         required: true
       }),
-      new TextboxFormItem({
-        key: 'name',
-        label: 'name',
-        required: true
-      }),
       new GroupFormItem({
         key: 'client',
         label: 'client',
@@ -70,8 +70,10 @@ export class AddressService extends ConfigService<Address> {
         return this.getInfluxdbItems();
       case 'taobao':
         return this.getTaobaoItems();
-      case 'elasticsearch':
-        return this.getElasticsearchItems();
+      case 'elasticsearch2':
+        return this.getElasticsearch2Items();
+      case 'elasticsearch5':
+        return this.getElasticsearch5Items();
       case 'hdfs':
         return this.getHDFSItems();
       case 'hbase':
@@ -144,10 +146,21 @@ export class AddressService extends ConfigService<Address> {
     ];
   }
 
-  private getElasticsearchItems() {
+  private getElasticsearch2Items() {
     return [
       new TextboxFormItem({key: 'hosts', label: 'hosts', value: 'localhost:9300,localhost:9301'}),
-      new GroupFormItem({key: 'setting', label: 'setting'})
+      new DynamicGroupFormItem({
+        key: 'settings', label: 'settings', value: {
+          "cluster.name": "elasticsearch",
+        }
+      })
+    ];
+  }
+
+  private getElasticsearch5Items() {
+    return [
+      new TextboxFormItem({key: 'hosts', label: 'hosts', value: 'localhost:9300,localhost:9301'}),
+      new DynamicGroupFormItem({key: 'settings', label: 'settings'})
     ];
   }
 
@@ -167,9 +180,11 @@ export class AddressService extends ConfigService<Address> {
 
   private getHDFSItems() {
     return [
-      new TextboxFormItem({key: 'uri', label: 'uri'}),
-      new TextboxFormItem({key: 'conf', label: 'conf'}),
-      new TextboxFormItem({key: 'user', label: 'user'})
+      new TextareaFormItem({key: 'hosts', label: 'hosts', placeholder: "properties"}),
+      new TextboxFormItem({key: 'user', label: 'user'}),
+      new TextareaFormItem({key: 'core-site.xml', label: 'core-site.xml'}),
+      new TextareaFormItem({key: 'hdfs-site.xml', label: 'hdfs-site.xml'}),
+      new TextareaFormItem({key: 'ssl-client.xml', label: 'ssl-client.xml'})
     ];
   }
 

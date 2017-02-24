@@ -1,16 +1,19 @@
 package teleporter.integration.component.hdfs
 
 import java.io.{InputStream, OutputStream}
-import java.net.URI
+import java.util.{Base64, Properties}
 
-import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
+import akka.stream.scaladsl.{Flow, Framing, Keep, Sink, Source}
 import akka.stream.{Attributes, TeleporterAttributes}
 import akka.util.ByteString
 import akka.{Done, NotUsed}
+import io.leopard.javahost.JavaHost
+import org.apache.commons.io.IOUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import teleporter.integration.component.{CommonSink, CommonSource, JdbcMessage}
 import teleporter.integration.core._
+import teleporter.integration.metrics.Metrics
 import teleporter.integration.utils.MapBean
 
 import scala.concurrent.Future
@@ -31,7 +34,7 @@ object Hdfs {
     val sourceConfig = sourceContext.config.mapTo[HdfsSourceMetaBean]
     val bind = Option(sourceConfig.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
-    Source.fromGraph(new HdfsSource(
+    val source = Source.fromGraph(new HdfsSource(
       path = new Path(sourceConfig.path),
       offset = sourceConfig.offset,
       len = sourceConfig.len,
@@ -39,8 +42,16 @@ object Hdfs {
       _create = () ⇒ center.context.register(addressKey, bind, () ⇒ address(addressKey)).client,
       _close = {
         _ ⇒
-          center.context.unRegister(sourceKey, bind)
+          center.context.unRegister(addressKey, bind)
       })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
+    var offset = sourceConfig.offset
+    val delimiterLength = sourceConfig.delimiter.map(_.length).getOrElse(0)
+    sourceConfig.delimiter.map(bs ⇒ source.via(Framing.delimiter(bs, Int.MaxValue, allowTruncation = true)))
+      .getOrElse(source).map { bs ⇒
+      offset += (bs.length + delimiterLength)
+      SourceMessage(offset, bs)
+    }
+      .via(Metrics.count[SourceMessage[Long, ByteString]](sourceKey)(center.metricsRegistry))
   }
 
   def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[ByteString], Message[ByteString], NotUsed] = {
@@ -55,8 +66,9 @@ object Hdfs {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
       },
       _close = {
-        _ ⇒ center.context.unRegister(sinkKey, bind)
+        _ ⇒ center.context.unRegister(addressKey, bind)
       })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
+      .via(Metrics.count[Message[ByteString]](sinkKey)(center.metricsRegistry))
   }
 
   def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[ByteString], Future[Done]] = {
@@ -65,12 +77,16 @@ object Hdfs {
 
   def address(addressKey: String)(implicit center: TeleporterCenter): AutoCloseClientRef[FileSystem] = {
     val config = center.context.getContext[AddressContext](addressKey).config.mapTo[HdfsMetaBean]
-    val conf = new Configuration(false)
-    val fileSystem = if (config.user.isEmpty) {
-      FileSystem.get(new URI(config.uri), conf)
-    } else {
-      FileSystem.get(new URI(config.uri), conf, config.user)
+    config.hosts.foreach { hosts ⇒
+      val properties = new Properties()
+      properties.load(IOUtils.toInputStream(hosts))
+      JavaHost.updateVirtualDns(properties)
     }
+    val conf = new Configuration(false)
+    config.coreSite.foreach(t ⇒ conf.addResource(IOUtils.toInputStream(t)))
+    config.hdfsSite.foreach(t ⇒ conf.addResource(IOUtils.toInputStream(t)))
+    config.sslClient.foreach(t ⇒ conf.addResource(IOUtils.toInputStream(t)))
+    val fileSystem = FileSystem.get(conf)
     AutoCloseClientRef[FileSystem](addressKey, fileSystem)
   }
 }
@@ -80,21 +96,25 @@ object HdfsSourceMetaBean {
   val FOffset = "offset"
   val FLen = "len"
   val FBufferSize = "bufferSize"
+  val FDelimiter = "delimiter"
 }
 
 class HdfsSourceMetaBean(override val underlying: JdbcMessage) extends SourceMetaBean(underlying) {
 
   import HdfsSourceMetaBean._
+  import SourceMetaBean._
 
   def path: String = client[String](FPath)
 
   def offset: Long = client.get[Long](FOffset).getOrElse(0)
 
-  def offset(offset: Long): MapBean = MapBean(this ++ (FOffset → offset))
+  def offset(offset: Long): MapBean = MapBean(this ++ (FClient, FOffset → offset))
 
   def len: Long = client.get[Long](FLen).getOrElse(Long.MaxValue)
 
   def bufferSize: Int = client.get[Int](FBufferSize).getOrElse(4096)
+
+  def delimiter: Option[ByteString] = client.get[String](FDelimiter).map(Base64.getDecoder.decode(_)).map(ByteString(_))
 }
 
 object HdfsSinkMetaBean {
@@ -115,7 +135,7 @@ class HdfsSource(path: Path,
                  offset: Long, len: Long = Long.MaxValue, bufferSize: Int,
                  _create: () ⇒ FileSystem,
                  _close: FileSystem ⇒ Unit)
-  extends CommonSource[FileSystem, SourceMessage[Long, ByteString]]("HdfsReader") {
+  extends CommonSource[FileSystem, ByteString]("HdfsReader") {
   override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.CacheDispatcher
 
   val buf = new Array[Byte](bufferSize)
@@ -126,18 +146,17 @@ class HdfsSource(path: Path,
   override def create(): FileSystem = {
     val fs = _create()
     inputStream = fs.open(path)
+    inputStream.skip(offset)
     fs
   }
 
-  override def readData(client: FileSystem): Option[SourceMessage[Long, ByteString]] = {
+  override def readData(client: FileSystem): Option[ByteString] = {
     val bytesToRead = if (bytesRemaining < buf.length) bytesRemaining else buf.length
     bytesRead = inputStream.read(buf, 0, bytesToRead.toInt)
-    if (bytesRead == -1) {
-      None
-    } else {
+    if (bytesRead >= 0) {
       bytesRemaining -= bytesRead
-      Some(SourceMessage(len - bytesRemaining, ByteString.fromArray(buf, 0, bytesToRead.toInt)))
-    }
+      Some(ByteString.fromArray(buf, 0, bytesRead))
+    } else None
   }
 
   override def close(client: FileSystem): Unit = {
@@ -169,18 +188,27 @@ class HdfsSink(path: Path, overwrite: Boolean, _create: () ⇒ FileSystem, _clos
 }
 
 object HdfsMetaBean {
+  val FHosts = "hosts"
   val FUri = "uri"
-  val FConf = "conf"
   val FUser = "user"
+  val FCoreSite = "core-site.xml"
+  val FHdfsSite = "hdfs-site.xml"
+  val FSSLClient = "ssl-client.xml"
 }
 
 class HdfsMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
 
   import HdfsMetaBean._
 
+  def hosts: Option[String] = client.get[String](FHosts)
+
   def uri: String = client[String](FUri)
 
-  def conf: String = client[String](FConf)
+  def user: Option[String] = client.get[String](FUser)
 
-  def user: String = client[String](FUser)
+  def coreSite: Option[String] = client.get[String](FCoreSite)
+
+  def hdfsSite: Option[String] = client.get[String](FHdfsSite)
+
+  def sslClient: Option[String] = client.get[String](FSSLClient)
 }

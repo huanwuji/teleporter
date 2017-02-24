@@ -8,7 +8,7 @@ import teleporter.integration.cluster.broker.PersistentProtocol.{Keys, Tables}
 import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.rpc.EventBody.{LinkAddress, LinkVariable}
 import teleporter.integration.cluster.rpc.TeleporterEvent
-import teleporter.integration.cluster.rpc.fbs.{EventType, Role}
+import teleporter.integration.cluster.rpc.fbs.EventType
 import teleporter.integration.core.TeleporterContext.{SyncBroker, _}
 import teleporter.integration.supervision.StreamDecider
 import teleporter.integration.utils.Converters._
@@ -52,7 +52,7 @@ case class TaskContext(id: Long, key: String, config: TaskMetaBean, streamSchedu
   }
 
   def sinks()(implicit center: TeleporterCenter): mutable.Map[String, SinkContext] = {
-    center.context.indexes.rangeTo[SinkContext](Keys(TASK_SOURCES, Keys.unapply(key, SINK)))
+    center.context.indexes.rangeTo[SinkContext](Keys(TASK_SOURCES, Keys.unapply(key, TASK)))
   }
 }
 
@@ -62,11 +62,11 @@ case class StreamContext(id: Long, key: String, config: StreamMetaBean, decider:
   }
 
   def sources()(implicit center: TeleporterCenter): mutable.Map[String, SourceContext] = {
-    center.context.indexes.rangeTo[SourceContext](Keys(STREAM_SOURCES, Keys.unapply(key, TASK)))
+    center.context.indexes.rangeTo[SourceContext](Keys(STREAM_SOURCES, Keys.unapply(key, STREAM)))
   }
 
   def sinks()(implicit center: TeleporterCenter): mutable.Map[String, SinkContext] = {
-    center.context.indexes.rangeTo[SinkContext](Keys(STREAM_SINKS, Keys.unapply(key, SINK)))
+    center.context.indexes.rangeTo[SinkContext](Keys(STREAM_SINKS, Keys.unapply(key, STREAM)))
   }
 }
 
@@ -86,7 +86,7 @@ case class SourceContext(id: Long, key: String, config: SourceMetaBean, actorRef
 
 case class SinkContext(id: Long, key: String, config: SinkMetaBean, actorRef: ActorRef = ActorRef.noSender) extends ExtraKeys with ComponentContext {
   def task()(implicit center: TeleporterCenter): TaskContext = {
-    center.context.getContext[TaskContext](Keys(TASK, Keys.unapply(key, SOURCE)))
+    center.context.getContext[TaskContext](Keys(TASK, Keys.unapply(key, SINK)))
   }
 
   def stream()(implicit center: TeleporterCenter): StreamContext = {
@@ -116,7 +116,7 @@ case class AddressContext(id: Long, key: String, config: AddressMetaBean, linkKe
 case class VariableContext(id: Long, key: String, config: VariableMetaBean, linkKeys: Set[String]) extends ComponentContext
 
 trait Addresses extends Logging {
-  private val addressIndexes = new TrieMap[String, TrieMap[String, CloseClientRef[_]]]
+  private val addressIndexes = new TrieMap[String /*bindKey*/ , TrieMap[String /*addressKey*/ , CloseClientRef[_]]]
 
   def register[A](addressKey: String, bindKey: String, clientRef: () ⇒ CloseClientRef[A]): CloseClientRef[A] = {
     addressIndexes.getOrElseUpdate(bindKey, TrieMap[String, CloseClientRef[_]]())
@@ -126,16 +126,18 @@ trait Addresses extends Logging {
   def unRegister(bindKey: String): Unit =
     addressIndexes.remove(bindKey).foreach(_.keys.foreach(unRegister(bindKey, _)))
 
-  def unRegister(bindKey: String, addressKey: String): Unit = {
-    addressIndexes.get(bindKey).foreach(_.get(addressKey)
-      .foreach { clientRef ⇒
+  def unRegister(addressKey: String, bindKey: String): Unit = {
+    addressIndexes.get(bindKey).foreach { clients ⇒
+      clients.remove(addressKey).foreach { clientRef ⇒
         try {
-          logger.info(s"client will closed, $bindKey, $addressKey")
+          logger.info(s"Client will closed, bindKey: $bindKey, addressKey: $addressKey")
           clientRef.close()
         } catch {
           case ex: Exception ⇒ logger.warn(s"Closed client error, $bindKey, $addressKey, ${ex.getMessage}", ex)
         }
-      })
+      }
+      if (clients.isEmpty) addressIndexes.remove(bindKey)
+    }
   }
 }
 
@@ -144,9 +146,13 @@ trait TeleporterContext extends Addresses {
 
   val ref: ActorRef
 
-  def getContext[A <: ComponentContext](id: Long): A = indexes.applyKey1(id).asInstanceOf[A]
+  def getContext[A <: ComponentContext](id: Long): A = getContextOption(id).get
 
-  def getContext[A <: ComponentContext](name: String): A = indexes.applyKey2(name).asInstanceOf[A]
+  def getContext[A <: ComponentContext](key: String): A = getContextOption(key).get
+
+  def getContextOption[A <: ComponentContext](id: Long): Option[A] = indexes.getKey1(id).asInstanceOf[Option[A]]
+
+  def getContextOption[A <: ComponentContext](key: String): Option[A] = indexes.getKey2(key).asInstanceOf[Option[A]]
 }
 
 class TeleporterContextImpl(val ref: ActorRef, val indexes: TwoIndexMap[Long, ComponentContext]) extends TeleporterContext
@@ -161,7 +167,7 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
   private def contextHandle(): Receive = {
     case Upsert(ctx: ComponentContext, trigger) ⇒
       ctx match {
-        case streamContext: StreamContext if streamContext.config.status != StreamStatus.NORMAL ⇒
+        case streamContext: StreamContext if streamContext.config.status == StreamStatus.COMPLETE || streamContext.config.status == StreamStatus.REMOVE ⇒
           self ! Remove(ctx, trigger)
         case _ ⇒
           if (indexes.getKey1(ctx.id).isDefined) {
@@ -181,11 +187,11 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
         case sourceContext: SourceContext ⇒
           sourceContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
           val addressKey = sourceContext.config.addressKey
-          if (addressKey != null && addressKey.nonEmpty) addLinkKeys(addressKey)
+          if (addressKey != null) addLinkKeys(addressKey)
         case sinkContext: SinkContext ⇒
           sinkContext.config.extraKeys.toMap.values.foreach({ case v: String ⇒ addLinkKeys(v) })
           val addressKey = sinkContext.config.addressKey
-          if (addressKey != null && addressKey.nonEmpty) addLinkKeys(addressKey)
+          if (addressKey != null) addLinkKeys(addressKey)
         case _: AddressContext ⇒
         case _: VariableContext ⇒
       }
@@ -240,14 +246,14 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
         case ctx: AddressContext ⇒
           center.eventListener.asyncEvent { seqNr ⇒
             center.brokers ! SendMessage(
-              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkAddress, role = Role.Request,
+              TeleporterEvent.request(seqNr = seqNr, eventType = EventType.LinkAddress,
                 body = LinkAddress(address = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
             )
           }
         case ctx: VariableContext ⇒
           center.eventListener.asyncEvent { seqNr ⇒
             center.brokers ! SendMessage(
-              TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkVariable, role = Role.Request,
+              TeleporterEvent.request(seqNr = seqNr, eventType = EventType.LinkVariable,
                 body = LinkVariable(variableKey = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
             )
           }

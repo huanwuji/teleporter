@@ -30,7 +30,7 @@
         <div class="col-sm-2">
           <input class="form-control" [(ngModel)]="dynamicKey" [ngModelOptions]="{standalone: true}" type="text">
         </div>
-        <div class="col-sm-9">
+        <div class="col-sm-4">
           <span class="btn btn-primary" (click)="dynamicItemAdd()">add</span>
         </div>
       </div>
@@ -55,11 +55,11 @@
         </div>
       </div>
       <div *ngFor="let ele of formItem.value; let i = index">
-        <div class="form-group">
-          <div class="col-sm-9">
-            <input [formControlName]="i" class="form-control" type="text">
+        <div class="form-group row">
+          <div class="col-sm-8">
+            <input [formControlName]="i" class="form-control" type="text" placeholder="{{formItem.placeholder}}">
           </div>
-          <div class="col-sm-1">
+          <div class="col-sm-2">
             <span class="btn btn-danger" (click)="dynamicItemDel(i)">del</span>
           </div>
         </div>

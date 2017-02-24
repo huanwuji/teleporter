@@ -10,6 +10,7 @@ import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import teleporter.integration.component.Roller.RollerContext
 import teleporter.integration.component._
 import teleporter.integration.core._
+import teleporter.integration.metrics.Metrics
 import teleporter.integration.utils.MapBean
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -38,8 +39,9 @@ object Jdbc {
       _create = () ⇒ center.context.register(addressKey, bind, () ⇒ address(addressKey)).client,
       _close = {
         _ ⇒
-          center.context.unRegister(sourceKey, bind)
+          center.context.unRegister(addressKey, bind)
       })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
+      .via(Metrics.count[SourceMessage[RollerContext, JdbcMessage]](sourceKey)(center.metricsRegistry))
   }
 
   def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[JdbcRecord], Future[Done]] = {
@@ -58,9 +60,10 @@ object Jdbc {
       }(ec),
       _close = {
         (_, _) ⇒
-          center.context.unRegister(sinkKey, bind)
+          center.context.unRegister(addressKey, bind)
           Future.successful(Done)
       })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
+      .via(Metrics.count[Message[JdbcRecord]](sinkKey)(center.metricsRegistry))
   }
 
   def address(addressKey: String)(implicit center: TeleporterCenter): AutoCloseClientRef[HikariDataSource] = {

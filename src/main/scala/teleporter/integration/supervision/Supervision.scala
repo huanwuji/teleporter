@@ -79,7 +79,7 @@ object Decider {
 trait Decider extends Logging {
   def supervisionStrategy: TeleporterAttributes.SupervisionStrategy
 
-  def teleporterFailure(ex: Throwable): Unit = logger.error(s"Exception will catch and process, ${ex.getMessage}", ex)
+  def teleporterFailure(ex: Throwable): Unit = logger.error(s"Exception was catch and process, ${ex.getMessage}", ex)
 
   protected def matchRule(ex: Throwable): Option[DecideRule] = {
     supervisionStrategy match {

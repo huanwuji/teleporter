@@ -12,7 +12,6 @@ import {
 
 export interface Source extends Identity {
   key?: string;
-  name?: string;
   address?: string;
   category?: string;
   errorRules?: string;
@@ -40,11 +39,6 @@ export class SourceService extends ConfigService<Source> {
         label: 'key',
         required: true
       }),
-      new TextboxFormItem({
-        key: 'name',
-        label: 'name',
-        required: true
-      }),
       new GroupFormItem({
         key: 'address',
         label: 'address',
@@ -60,6 +54,7 @@ export class SourceService extends ConfigService<Source> {
       new ArrayFormItem({
         key: 'errorRules',
         label: 'errorRules',
+        placeholder: 'regex => reload|retry|resume|stop(delay = 1.seconds, retries = 1, next = stop)'
       })];
     items = items.concat(this.getSourceComponentItems(category));
     items.push(new DynamicGroupFormItem({
@@ -109,6 +104,15 @@ export class SourceService extends ConfigService<Source> {
             value: this.getHdfsItems()
           })
         ];
+      case 'file':
+        return [
+          this.getAckItems(),
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getFileItems()
+          })
+        ];
       default:
         window.alert("Category not found");
     }
@@ -127,11 +131,10 @@ export class SourceService extends ConfigService<Source> {
           value: 1
         }),
         new TextboxFormItem({
-          key: 'batchCoordinateCommitNum',
-          label: 'batchCoordinateCommitNum',
+          key: 'commitInterval',
+          label: 'commitInterval',
           required: true,
-          type: 'number',
-          value: 25
+          value: '1.minute'
         }),
         new TextboxFormItem({
           key: 'cacheSize',
@@ -144,7 +147,7 @@ export class SourceService extends ConfigService<Source> {
           key: 'maxAge',
           label: 'maxAge',
           required: true,
-          value: '1.minutes'
+          value: '1.minute'
         })
       ]
     });
@@ -193,7 +196,18 @@ export class SourceService extends ConfigService<Source> {
       new TextboxFormItem({key: 'path', label: 'path'}),
       new TextboxFormItem({key: 'offset', label: 'offset', type: 'number'}),
       new TextboxFormItem({key: 'len', label: 'len', type: 'number'}),
-      new TextboxFormItem({key: 'bufferSize', label: 'bufferSize', type: '4096'}),
+      new TextboxFormItem({key: 'bufferSize', label: 'bufferSize', type: 'number', value: '4096'}),
+      new TextboxFormItem({key: 'delimiter', label: 'delimiter', value: '', placeholder: 'base64, \\n: Cg=='}),
+    ];
+  }
+
+  private getFileItems() {
+    return [
+      new TextboxFormItem({key: 'path', label: 'path'}),
+      new TextboxFormItem({key: 'offset', label: 'offset', type: 'number'}),
+      new TextboxFormItem({key: 'len', label: 'len', type: 'number'}),
+      new TextboxFormItem({key: 'bufferSize', label: 'bufferSize', type: 'number', value: '4096'}),
+      new TextboxFormItem({key: 'delimiter', label: 'delimiter', value: '', placeholder: 'base64, \\n: Cg=='}),
     ];
   }
 }

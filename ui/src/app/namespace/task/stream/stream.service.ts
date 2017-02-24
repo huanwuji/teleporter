@@ -15,7 +15,6 @@ export interface Stream extends Identity {
   ns?: string;
   task?: string;
   key?: string;
-  name?: string;
   arguments?: string;
   template?: string;
 }
@@ -41,11 +40,6 @@ export class StreamService extends ConfigService<Stream> {
         required: true
       }),
       new TextboxFormItem({
-        key: 'name',
-        label: 'name',
-        required: true
-      }),
-      new TextboxFormItem({
         key: 'cron',
         label: 'cron',
         placeholder: '* * * * *'
@@ -55,8 +49,9 @@ export class StreamService extends ConfigService<Stream> {
         label: 'status',
         options: [
           {key: 'NORMAL', value: 'NORMAL'},
-          {key: 'INVALID', value: 'INVALID'},
-          {key: 'COMPLETE', value: 'COMPLETE'}
+          {key: 'FAILURE', value: 'FAILURE'},
+          {key: 'COMPLETE', value: 'COMPLETE'},
+          {key: 'REMOVE', value: 'REMOVE'}
         ],
         value: 'NORMAL'
       }),
@@ -66,7 +61,8 @@ export class StreamService extends ConfigService<Stream> {
       }),
       new ArrayFormItem({
         key: 'errorRules',
-        label: 'errorRules'
+        label: 'errorRules',
+        placeholder: 'regex => start|stop|restart(delay = 1.seconds, retries = 1, next = stop)'
       }),
       new DynamicGroupFormItem({
         key: 'arguments',

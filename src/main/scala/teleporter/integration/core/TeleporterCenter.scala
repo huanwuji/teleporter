@@ -53,7 +53,7 @@ trait TeleporterCenter extends Logging {
 
   def configRef: ActorRef
 
-  def defaultSourceCheckPoint: CheckPoint[MapBean]
+  def defaultSourceSavePoint: SavePoint[MapBean]
 
   def eventListener: EventListener[TeleporterEvent[_ <: EventBody]]
 
@@ -79,7 +79,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
   var _brokers: ActorRef = _
   var _streams: ActorRef = _
   var _configRef: ActorRef = _
-  var _defaultRecoveryPoint: CheckPoint[MapBean] = _
+  var _defaultRecoveryPoint: SavePoint[MapBean] = _
   var _metricRegistry: MetricRegistry = _
   val _eventListener: EventListener[TeleporterEvent[_ <: EventBody]] = EventListener[TeleporterEvent[_ <: EventBody]]()
   val _teleporterConfigClient = TeleporterConfigClient()
@@ -89,7 +89,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
     _context = TeleporterContext()
     _streams = Streams()
     _configRef = TeleporterConfigActor(_eventListener)
-    _defaultRecoveryPoint = CheckPoint.sourceCheckPoint()
+    _defaultRecoveryPoint = SavePoint.sourceSavePoint()
     _metricRegistry = MetricRegistry()
     _localStatusRef = system.actorOf(Props(classOf[LocalStatusActor], config.getString("status-file"), this))
     val (brokerRef, connected) = Brokers(seedBrokers)
@@ -122,7 +122,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
 
   override def configRef: ActorRef = _configRef
 
-  override def defaultSourceCheckPoint: CheckPoint[MapBean] = _defaultRecoveryPoint
+  override def defaultSourceSavePoint: SavePoint[MapBean] = _defaultRecoveryPoint
 
   override def eventListener: EventListener[TeleporterEvent[_ <: EventBody]] = _eventListener
 

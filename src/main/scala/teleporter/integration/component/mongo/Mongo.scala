@@ -7,6 +7,7 @@ import org.mongodb.scala.{Document, MongoClient, MongoCollection}
 import teleporter.integration.component.Roller.RollerContext
 import teleporter.integration.component._
 import teleporter.integration.core._
+import teleporter.integration.metrics.Metrics
 import teleporter.integration.script.Template
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.MapBean
@@ -42,9 +43,10 @@ object Mongo {
       }(ec),
       _close = {
         (_, _) ⇒
-          center.context.unRegister(sourceKey, bind)
+          center.context.unRegister(addressKey, bind)
           Future.successful(Done)
       })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
+      .via(Metrics.count[SourceMessage[RollerContext, Seq[MongoMessage]]](sourceKey)(center.metricsRegistry))
   }
 
   def address(key: String)(implicit center: TeleporterCenter): AutoCloseClientRef[MongoClient] = {
@@ -89,8 +91,8 @@ class MongoSourceAsync(filter: Option[String],
                        _close: (MongoCollection[MongoMessage], ExecutionContext) ⇒ Future[Done])
   extends RollerSourceAsync[SourceMessage[RollerContext, Seq[MongoMessage]], MongoCollection[MongoMessage]]("jdbc.source", rollerContext) {
 
-  override def readData(client: MongoCollection[MongoMessage], rollerContext: RollerContext, executionContext: ExecutionContext)
-  : Future[Option[SourceMessage[RollerContext, Seq[MongoMessage]]]] = {
+  override def readData(client: MongoCollection[MongoMessage], rollerContext: RollerContext,
+                        executionContext: ExecutionContext): Future[Option[SourceMessage[RollerContext, Seq[MongoMessage]]]] = {
     implicit val ec = executionContext
     val filterDoc = filter.map(s ⇒ Document(Template(s, rollerContext.toMap))).getOrElse(Document())
     val query = client.find(filterDoc)

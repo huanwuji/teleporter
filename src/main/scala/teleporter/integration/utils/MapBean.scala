@@ -26,7 +26,10 @@ trait MapBean extends Converters with Convert {
   }
 
   def apply[A](paths: String*)(implicit converter: Converter[A]): A = {
-    this.get[A](paths: _*).get
+    this.get[A](paths: _*) match {
+      case None ⇒ throw new NoSuchElementException(s"Path not found: $paths")
+      case Some(value) ⇒ value
+    }
   }
 
   def ++(kv: (String, Any)*): Map[String, Any] = underlying ++ kv

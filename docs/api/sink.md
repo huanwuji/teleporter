@@ -37,7 +37,6 @@
 {
 	"key": "/sink/test/test_task/kafka_send/send_sink",
 	"value": `{
-		"id": 439,
 		"key": "send_sink",
 		"name": "",
 		"address": {

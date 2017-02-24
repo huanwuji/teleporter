@@ -31,7 +31,7 @@ class LevelDBService(table: LevelTable) extends PersistentService {
 
   override def delete(key: String): Unit = table.remove(key)
 
-  override def atomicPut(key: String, expect: String, update: String): Boolean = table.atomicPut(key, expect, update)
+  override def unsafeAtomicPut(key: String, expect: String, update: String): Boolean = table.atomicPut(key, expect, update)
 
   override def apply(key: String): KeyValue = get(key).get
 

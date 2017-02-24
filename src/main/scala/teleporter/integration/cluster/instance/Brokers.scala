@@ -77,7 +77,7 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
     case SelectOne ⇒
       mainBroker = brokerConnections.values.toSeq(Random.nextInt(brokerConnections.size))
       center.eventListener.asyncEvent { seqNr ⇒
-        mainBroker.senderRef ! TeleporterEvent(seqNr = seqNr, eventType = EventType.LinkInstance, role = Role.Request,
+        mainBroker.senderRef ! TeleporterEvent.request(seqNr = seqNr, eventType = EventType.LinkInstance,
           body = LinkInstance(instance = center.instanceKey, broker = mainBroker.broker.key,
             ip = InetAddress.getLocalHost.getHostAddress, port = 9094, timestamp = System.currentTimeMillis()))
       }._2.onComplete {

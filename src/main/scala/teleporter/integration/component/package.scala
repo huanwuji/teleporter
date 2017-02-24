@@ -4,7 +4,7 @@ import javax.sql.DataSource
 
 import kafka.message.MessageAndMetadata
 import org.apache.kafka.clients.producer.ProducerRecord
-import org.elasticsearch.action.update.UpdateRequest
+import org.elasticsearch.action.ActionRequest
 import org.mongodb.scala.Document
 import teleporter.integration.component.jdbc.Action
 import teleporter.integration.component.kudu.KuduAction
@@ -19,7 +19,7 @@ package object component {
   type JdbcMessage = Map[String, Any]
   type JdbcRecord = Seq[Action]
   type JdbcFunction = DataSource ⇒ Unit
-  type ElasticRecord = UpdateRequest
+  type ElasticRecord = ActionRequest[_ <: AnyRef]
   type MongoMessage = Document
   type KuduRecord = KuduAction
 }

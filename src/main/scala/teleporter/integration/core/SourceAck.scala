@@ -2,6 +2,7 @@ package teleporter.integration.core
 
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
+import akka.actor.Terminated
 import akka.stream.ActorAttributes.SupervisionStrategy
 import akka.stream._
 import akka.stream.scaladsl.{Flow, Keep, Sink}
@@ -9,12 +10,15 @@ import akka.stream.stage.GraphStageLogic.StageActor
 import akka.stream.stage._
 import akka.{Done, NotUsed}
 import org.apache.logging.log4j.scala.Logging
-import teleporter.integration.utils.MapBean
+import teleporter.integration.core.TeleporterConfigActor.LoadStream
+import teleporter.integration.core.TeleporterContext.Update
+import teleporter.integration.utils.{MapBean, MapMetaBean}
 
 import scala.collection.mutable
 import scala.concurrent.Future
 import scala.concurrent.duration.{Duration, _}
 import scala.util.control.NonFatal
+import scala.util.{Failure, Success, Try}
 
 /**
   * Created by huanwuji 
@@ -23,7 +27,7 @@ import scala.util.control.NonFatal
 object SourceAckMetaBean {
   val FAck = "ack"
   val FChannelSize = "channelSize"
-  val FBatchCoordinateCommitNum = "batchCoordinateCommitNum"
+  val FCommitInterval = "commitInterval"
   val FCacheSize = "cacheSize"
   val FMaxAge = "maxAge"
 }
@@ -36,7 +40,7 @@ class SourceAckMetaBean(override val underlying: Map[String, Any]) extends Sourc
 
   def channelSize: Int = ack.get[Int](FChannelSize).getOrElse(1)
 
-  def batchCoordinateCommitNum: Int = ack.get[Int](FBatchCoordinateCommitNum).getOrElse(512)
+  def commitInterval: Long = ack.get[Duration](FCommitInterval).getOrElse(1.minute).toMillis
 
   def cacheSize: Int = ack.get[Int](FCacheSize).getOrElse(1024)
 
@@ -47,7 +51,7 @@ case class ConfirmData(data: Any, created: Long)
 
 class BitSets(bitSets: Array[mutable.BitSet]) {
   def apply(idx: Int): Boolean = {
-    !bitSets.exists(_ (idx) == false)
+    !bitSets.exists(!_ (idx))
   }
 
   def apply(idx: Int, channel: Int): Boolean = {
@@ -64,7 +68,7 @@ class BitSets(bitSets: Array[mutable.BitSet]) {
 }
 
 object BitSets {
-  def apply(size: Int, channelSize: Int) = new BitSets(Array.fill(size)(new mutable.BitSet(size)))
+  def apply(size: Int, channelSize: Int) = new BitSets(Array.fill(channelSize)(new mutable.BitSet(size)))
 }
 
 class RingPool(size: Int, channelSize: Int) extends Logging {
@@ -92,7 +96,7 @@ class RingPool(size: Int, channelSize: Int) extends Logging {
     val ringIdx = (idx % size).toInt
     if (bitSets(ringIdx, channel)) {
       bitSets -= (ringIdx, channel)
-      if (bitSets(ringIdx)) {
+      if (!bitSets(ringIdx)) {
         elements.update(ringIdx, null)
         canConfirmed
       }
@@ -101,24 +105,33 @@ class RingPool(size: Int, channelSize: Int) extends Logging {
     }
   }
 
-  def canConfirmed: Long = {
+  def canConfirmCursor: Long = canConfirmedCursor
+
+  private def canConfirmed: Long = {
     while ( {
       val nextConfirmedCursor = canConfirmedCursor + 1
-      nextConfirmedCursor < usedCursor.get() && !bitSets((nextConfirmedCursor % size).toInt)
+      nextConfirmedCursor <= usedCursor.get() && !bitSets((nextConfirmedCursor % size).toInt)
     }) {
       canConfirmedCursor += 1
     }
     canConfirmedCursor
   }
 
-  def canConfirmedSize: Long = canConfirmed - confirmedCursor
+  def canConfirmedSize: Long = canConfirmedCursor - confirmedCursor
 
   def unConfirmedSize: Long = usedCursor.get() - confirmedCursor
+
+  def confirmEnd(): Boolean = {
+    if (canConfirmedCursor == usedCursor.get()) {
+      confirmed()
+      true
+    } else false
+  }
 
   def confirmed(): Unit = confirmed(canConfirmedCursor)
 
   def confirmed(confirmCursor: Long): Unit = {
-    require(confirmCursor <= canConfirmed, s"Confirm cursor must less then canConfirmed, $confirmCursor, $canConfirmed")
+    require(confirmCursor <= canConfirmedCursor, s"Confirm cursor must less then canConfirmed, $confirmCursor, $canConfirmedCursor")
     if (confirmCursor > this.confirmedCursor) {
       freeSpace.addAndGet((confirmCursor - this.confirmedCursor).toInt)
       confirmedCursor = confirmCursor
@@ -137,7 +150,7 @@ object RingPool {
 case class SourceAckConfig(
                             channelSize: Int,
                             cacheSize: Int,
-                            batchCoordinateCommitNum: Int,
+                            commitInterval: Long,
                             maxAge: Duration)
 
 object SourceAckConfig {
@@ -146,41 +159,62 @@ object SourceAckConfig {
     SourceAckConfig(
       channelSize = ackMetaBean.channelSize,
       cacheSize = ackMetaBean.cacheSize,
-      batchCoordinateCommitNum = ackMetaBean.batchCoordinateCommitNum,
+      commitInterval = ackMetaBean.commitInterval,
       maxAge = ackMetaBean.maxAge
     )
   }
 }
 
-object SourceAck {
-  def flow[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, finish: () ⇒ Unit)
+object SourceAck extends Logging {
+  def flow[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, finish: XY ⇒ Unit)
                  (implicit center: TeleporterCenter): Flow[SourceMessage[XY, T], AckMessage[XY, T], NotUsed] = {
     Flow.fromGraph(new SourceAck[XY, T](id, config, commit, finish))
   }
 
   def flow[T](id: Long, config: MapBean)(implicit center: TeleporterCenter): Flow[SourceMessage[MapBean, T], AckMessage[MapBean, T], NotUsed] = {
+    import center.system.dispatcher
     val context = center.context.getContext[SourceContext](id)
     Flow.fromGraph(new SourceAck[MapBean, T](
       id = id,
       config = SourceAckConfig(config),
-      commit = coordinate ⇒ center.defaultSourceCheckPoint.save(context.key, coordinate),
-      finish = () ⇒ center.defaultSourceCheckPoint.complete(context.key)
+      commit = {
+        coordinate ⇒
+          center.defaultSourceSavePoint.save(context.key, coordinate)
+            .onComplete(saveComplete(context, coordinate, _))
+      },
+      finish = {
+        coordinate ⇒
+          center.defaultSourceSavePoint.complete(context.key, coordinate)
+            .onComplete(saveComplete(context, coordinate, _))
+      }
     ))
   }
 
-  def flow[XY, T](id: Long, config: MapBean, checkPoint: CheckPoint[XY])(implicit center: TeleporterCenter): Unit = {
+  private def saveComplete(context: SourceContext, coordinate: MapBean, result: Try[Boolean])(implicit center: TeleporterCenter): Unit = {
+    result match {
+      case Success(v) ⇒
+        if (v) {
+          center.context.ref ! Update(context.copy(config = MapMetaBean[SourceMetaBean](coordinate)))
+        } else {
+          center.configRef ! LoadStream(context.key)
+        }
+      case Failure(ex) ⇒ logger.info(s"${context.key} save failure", ex)
+    }
+  }
+
+  def flow[XY, T](id: Long, config: MapBean, savePoint: SavePoint[XY])(implicit center: TeleporterCenter): Unit = {
     val context = center.context.getContext[SourceContext](id)
     Flow.fromGraph(new SourceAck[XY, T](
       id = id,
       config = SourceAckConfig(config),
-      commit = coordinate ⇒ checkPoint.save(context.key, coordinate),
-      finish = () ⇒ checkPoint.complete(context.key)
+      commit = coordinate ⇒ savePoint.save(context.key, coordinate),
+      finish = coordinate ⇒ savePoint.complete(context.key, coordinate)
     ))
   }
 
   def confirmFlow[T](): Flow[Message[T], Message[T], NotUsed] = {
     Flow[Message[T]].map {
-      case m: AckMessage[_, _] ⇒ m.confirmed.invoke(m.id); m
+      case m: AckMessage[_, _] ⇒ m.confirmed(m.id); m
     }
   }
 
@@ -189,8 +223,8 @@ object SourceAck {
   }
 }
 
-class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, finish: () ⇒ Unit)(implicit center: TeleporterCenter)
-  extends GraphStage[FlowShape[SourceMessage[XY, T], AckMessage[XY, T]]] {
+class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, finish: XY ⇒ Unit)
+  extends GraphStage[FlowShape[SourceMessage[XY, T], AckMessage[XY, T]]] with Logging {
   var ringPool: RingPool = _
   val in: Inlet[SourceMessage[XY, T]] = Inlet[SourceMessage[XY, T]]("source.ack.in")
   val out: Outlet[AckMessage[XY, T]] = Outlet[AckMessage[XY, T]]("source.ack.out")
@@ -205,28 +239,39 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
       private val coordinates = mutable.Queue[(Long, XY)]()
       private var lastCoordinate: XY = _
       var self: StageActor = _
-      val confirmed: AsyncCallback[TId] = getAsyncCallback[TId](tId ⇒ self.ref ! tId)
+      val confirmed: TId ⇒ Unit = tId ⇒ self.ref ! tId
       var expiredMessages: Iterator[AckMessage[XY, T]] = Iterator.empty
       var lastCheck: Long = _
+      @volatile var fullWait = false
 
       @scala.throws[Exception](classOf[Exception])
       override def preStart(): Unit = {
         ringPool = RingPool(config.cacheSize, config.channelSize)
-        var batchCoordinateCommitNum = 0
+        var lastCommitTime = System.currentTimeMillis()
+        var unCommitCount = 0
         self = getStageActor {
           case (_, tId: TId) ⇒
             ringPool.remove(tId.seqNr, tId.channelId)
-            val canConfirmedIdx = ringPool.canConfirmed
             var latestCoordinate = coordinates.head
-            while (coordinates.head._1 < canConfirmedIdx) {
+            while (coordinates.head._1 < ringPool.canConfirmCursor) {
               latestCoordinate = coordinates.dequeue()
-              batchCoordinateCommitNum += 1
+              unCommitCount += 1
             }
-            if (batchCoordinateCommitNum >= config.batchCoordinateCommitNum) {
+            if (System.currentTimeMillis() - lastCommitTime >= config.commitInterval) {
               commit(latestCoordinate._2)
               ringPool.confirmed(latestCoordinate._1)
-              batchCoordinateCommitNum = 0
+              lastCommitTime = System.currentTimeMillis()
+              unCommitCount = 0
+            } else if (unCommitCount > 1) {
+              ringPool.confirmed(latestCoordinate._1)
+              unCommitCount = 0
             }
+            if (fullWait) {
+              fullWait = false
+              if (isAvailable(in) && isAvailable(out)) onPush()
+            }
+            tryFinish()
+          case (_, Terminated(_)) ⇒ logger.info(s"$id stageActor will terminated")
         }
       }
 
@@ -239,13 +284,13 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
             emit(out, expiredMessages.next())
             return
           }
-          scheduleOnce('push, 1.second)
+          fullWait = true
           return
         }
         val elem = grab(in)
         try {
           val seqNr = ringPool.add { idx ⇒
-            val ackMessage = AckMessage(id = TId(id, idx), coordinate = elem.coordinate, data = elem.data, confirmed = confirmed)
+            val ackMessage = Message.ack(id = TId(id, idx), coordinate = elem.coordinate, data = elem.data, confirmed = confirmed)
             push(out, ackMessage)
             ackMessage
           }
@@ -261,7 +306,7 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
         }
       }
 
-      override def onPull(): Unit = pull(in)
+      override def onPull(): Unit = if (!isClosed(in)) pull(in)
 
       private def expired(): Unit = {
         expiredMessages = ringPool.elements
@@ -270,19 +315,12 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
       }
 
       @scala.throws[Exception](classOf[Exception])
-      override protected def onTimer(timerKey: Any): Unit = {
-        timerKey match {
-          case 'push ⇒ onPush()
-        }
-      }
+      override def onUpstreamFinish(): Unit = tryFinish()
 
-      @scala.throws[Exception](classOf[Exception])
-      override def onUpstreamFinish(): Unit = {
-        if (ringPool.unConfirmedSize == 0) {
-          finish()
+      private def tryFinish(): Unit = {
+        if (ringPool.confirmEnd() && isClosed(in) && !isClosed(out)) {
+          if (lastCoordinate != null) finish(lastCoordinate)
           completeStage()
-        } else {
-
         }
       }
 

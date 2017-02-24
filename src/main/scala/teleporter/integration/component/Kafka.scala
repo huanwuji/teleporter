@@ -10,6 +10,7 @@ import kafka.consumer.ConsumerConfig
 import kafka.javaapi.consumer.ZkKafkaConsumerConnector
 import org.apache.kafka.clients.producer._
 import teleporter.integration.core._
+import teleporter.integration.metrics.Metrics
 
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future, Promise}
@@ -44,15 +45,16 @@ object Kafka {
     val subscribeTopics = kafkaSourceConfig.topics.split(",").map(_.split(":"))
       .map { case Array(topic, threads) ⇒ (topic, Int.box(threads.toInt)) }.toMap
     val client = center.context.register(addressKey, bind, () ⇒ consumer(addressKey)).client
-    val checkPoint = KafkaCheckPoint(client.zkKafkaConnector)
+    val savePoint = KafkaSavePoint(client.zkKafkaConnector)
     client.subscribe(subscribeTopics).map(m ⇒ SourceMessage(KafkaLocation(TopicPartition(m.topic, m.partition), m.offset), m))
       .via(SourceAck.flow(
         id = sourceContext.id,
         config = SourceAckConfig(sourceContext.config),
-        commit = coordinate ⇒ checkPoint.save(sourceKey, coordinate),
-        finish = () ⇒ checkPoint.complete(sourceKey)
+        commit = coordinate ⇒ savePoint.save(sourceKey, coordinate),
+        finish = coordinate ⇒ savePoint.complete(sourceKey, coordinate)
       ))
       .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
+      .via(Metrics.count[AckMessage[KafkaLocation, KafkaMessage]](sourceKey)(center.metricsRegistry))
   }
 
   def source(sourceKey: String)(implicit center: TeleporterCenter): Source[KafkaMessage, NotUsed] = {
@@ -64,6 +66,7 @@ object Kafka {
       .map { case Array(topic, threads) ⇒ (topic, Int.box(threads.toInt)) }.toMap
     center.context.register(addressKey, bind, () ⇒ consumer(addressKey)).client.subscribe(subscribeTopics)
       .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
+      .via(Metrics.count[KafkaMessage](sourceKey)(center.metricsRegistry))
   }
 
   def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[KafkaRecord], Future[Done]] = {
@@ -79,7 +82,7 @@ object Kafka {
         center.context.register(addressKey, bind, () ⇒ producer(addressKey)).client
       }(ec), _close = {
         (_, _) ⇒
-          center.context.unRegister(sinkKey, bind)
+          center.context.unRegister(addressKey, bind)
           Future.successful(Done)
       }))
       .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))

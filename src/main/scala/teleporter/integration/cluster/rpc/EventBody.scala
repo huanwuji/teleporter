@@ -390,9 +390,11 @@ object EventBody {
   class Empty extends EventBody
 
   object Empty {
-    def empty = new Empty
+    val empty = new Empty
 
-    def toArray: Array[Byte] = Array.emptyByteArray
+    def apply(bytes: Array[Byte]): Empty = empty
+
+    def toArray(body: Empty): Array[Byte] = Array.emptyByteArray
   }
 
 }

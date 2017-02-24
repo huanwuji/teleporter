@@ -11,7 +11,6 @@ import teleporter.integration.component.kv.rocksdb.RocksDBs
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{Jackson, MapBean, MapMetaBean}
 
-import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.reflect.ClassTag
 import scala.util.matching.Regex
@@ -42,13 +41,13 @@ trait PersistentService {
 
   def put(key: String, value: String): KeyValue = {
     val map = Jackson.mapper.readValue[Map[String, Any]](value)
-    val newValue = map.get("id") match {
-      case Some(id) if id != null && asString(id).nonEmpty ⇒ value
+    val newValue = map.get("id").flatMap(asNonEmptyString) match {
+      case Some(_) ⇒ Jackson.mapper.writeValueAsString(map)
       case _ ⇒
         val newMap = this.synchronized {
           get(key) match {
             case Some(kv) ⇒
-              val oldMap = Jackson.mapper.readValue[mutable.Map[String, Any]](kv.value)
+              val oldMap = Jackson.mapper.readValue[Map[String, Any]](kv.value)
               oldMap.get("id") match {
                 case Some(id) if id != null && asString(id).nonEmpty ⇒ map + ("id" → id)
                 case _ ⇒ map + ("id" → id())
@@ -66,7 +65,16 @@ trait PersistentService {
 
   def delete(key: String): Unit
 
-  def atomicPut(key: String, expect: String, update: String): Boolean
+  def atomicPut(key: String, expect: String, update: String): Boolean = {
+    unsafeAtomicPut(key, reorder(expect), reorder(update))
+  }
+
+  protected def unsafeAtomicPut(key: String, expect: String, update: String): Boolean
+
+  def reorder(value: String): String = {
+    val map = Jackson.mapper.readValue[Map[String, Any]](value)
+    Jackson.mapper.writeValueAsString(map)
+  }
 }
 
 object PersistentProtocol {

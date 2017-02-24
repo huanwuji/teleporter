@@ -7,7 +7,6 @@ import {FormItemBase, TextboxFormItem, DynamicGroupFormItem, TextareaFormItem} f
 export interface Task extends Identity {
   ns?: string;
   key?: string;
-  name?: string;
   group?: string;
   arguments?: string;
   template?: string;
@@ -31,11 +30,6 @@ export class TaskService extends ConfigService<Task> {
       new TextboxFormItem({
         key: 'key',
         label: 'key',
-        required: true
-      }),
-      new TextboxFormItem({
-        key: 'name',
-        label: 'name',
         required: true
       }),
       new TextboxFormItem({

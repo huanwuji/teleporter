@@ -22,6 +22,8 @@ Now support: kafka, jdbc, kudu, mongo, elasticsearch, hdfs, hbase
             * sink - akka-streams sink, for data write
     - address - data address, like database, kafka...
     - variable - a public variable refer
+    
+### [Rest API](docs/rest_api.md)
  
 All node can refresh, and all instance will be dynamic refresh.
 User defined exception process. Pattern `errorMessage Regex match : (DEBUG|INFO|WARN|ERROR) => Action`
@@ -35,8 +37,6 @@ support main process rules:
     > reload, retry, resume, stop
     
 Next will collect error metrics on UI for monitor.
-
-### [Rest API](docs/rest_api.md)
 
 ### Install
 for linux:
@@ -65,12 +65,10 @@ object StreamExample extends StreamLogic {
   override def apply(key: String, center: TeleporterCenter): (KillSwitch, Future[Done]) = {
     import center.{materializer, self}
     Jdbc.sourceAck("/source/ns/task/stream/source")
-      .map(x ⇒
-        x.map(data ⇒ Seq(Upsert(
-          updateSql("table_name", "id", data),
-          insertIgnoreSql("table_name", data)
-        ))).toMessage
-      )
+      .map(_.map(data ⇒ Seq(Upsert(
+        updateSql("table_name", "id", data),
+        insertIgnoreSql("table_name", data)
+      ))).toMessage)
       .viaMat(KillSwitches.single)(Keep.right).watchTermination()(Keep.both)
       .via(Jdbc.flow("/source/ns/task/stream/sink"))
       .to(SourceAck.confirmSink())

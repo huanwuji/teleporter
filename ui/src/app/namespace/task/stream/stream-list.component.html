@@ -20,7 +20,6 @@
     <tbody>
     <tr>
       <th>key</th>
-      <th>name</th>
       <th>source</th>
       <th>sink</th>
       <th>status</th>
@@ -30,12 +29,12 @@
       <td>
         <a [routerLink]="[kb.value.key]">{{kb.value.key}}</a>
       </td>
-      <td>{{kb.value.name}}</td>
       <td><a [routerLink]="['/source', ns, task, kb.value.key]">{{kb.value.key}}</a></td>
       <td><a [routerLink]="['/sink', ns, task, kb.value.key]">{{kb.value.key}}</a></td>
       <td>
         <div [ngSwitch]="kb.value.status">
           <span *ngSwitchCase="'NORMAL'" class="text-primary">{{kb.value.status}}</span>
+          <span *ngSwitchCase="'FAILURE'" class="text-danger">{{kb.value.status}}</span>
           <span *ngSwitchCase="'REMOVE'" class="text-danger">{{kb.value.status}}</span>
           <span *ngSwitchCase="'COMPLETE'" class="text-success">{{kb.value.status}}</span>
         </div>

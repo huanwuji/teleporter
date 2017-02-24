@@ -17,7 +17,6 @@
     <tbody>
     <tr>
       <th>key</th>
-      <th>name</th>
       <th>stream</th>
       <th>partition</th>
       <th>group</th>
@@ -27,7 +26,6 @@
       <td>
         <a [routerLink]="[kb.value.key]">{{kb.value.key}}</a>
       </td>
-      <td>{{kb.value.name}}</td>
       <td>
         <a [routerLink]="['/stream', ns, kb.value.key]">{{kb.value.key}}</a>
       </td>

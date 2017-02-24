@@ -16,7 +16,6 @@
     <tbody>
     <tr>
       <th>key</th>
-      <th>name</th>
       <th>runtime</th>
       <th><a class="btn btn-primary" [routerLink]="['add']">add</a></th>
     </tr>
@@ -24,7 +23,6 @@
       <td>
         <a [routerLink]="[kb.value.key]">{{kb.key}}</a>
       </td>
-      <td>{{kb.value.name}}</td>
       <td>
         <a (click)="runtime(i, kb.key)">📃</a>
         <div *ngIf="kb.value.runtime">

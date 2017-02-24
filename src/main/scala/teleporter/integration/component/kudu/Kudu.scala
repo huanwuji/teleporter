@@ -30,12 +30,11 @@ object Kudu {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
       }(ec), {
         (_, _) ⇒
-          center.context.unRegister(sinkKey, bind)
+          center.context.unRegister(addressKey, bind)
           Future.successful(Done)
       }))
       .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
       .via(Metrics.count[Message[KuduRecord]](sinkKey)(center.metricsRegistry))
-
   }
 
   def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[KuduRecord], Future[Done]] = {

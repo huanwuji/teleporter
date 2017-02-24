@@ -188,6 +188,7 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
         val cb = getAsyncCallback[Try[C]] {
           case scala.util.Success(res) ⇒
             client = res
+            if (isAvailable(in)) onPush()
             if (withPull) onPull()
           case scala.util.Failure(t) ⇒ teleporterFailure(t)
         }
@@ -222,6 +223,7 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
 
       override def onPush(): Unit = {
         try {
+          if (client == null) return
           val elem = if (!retriesBuffer.isEmpty) {
             retriesBuffer.remove()
           } else {
@@ -238,17 +240,18 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
           case NonFatal(ex) ⇒ teleporterFailure(ex)
         }
         if (todo < parallelism && !hasBeenPulled(in)) tryPull(in)
+        if (!isAvailable(in)) onUpstreamFinish()
       }
 
       override def onPull(): Unit = {
         if (!buffer.isEmpty) push(out, buffer.remove())
-        else if (isClosed(in) && todo == 0) completeStage()
+        else if (isClosed(in) && todo == 0) closeStage()
 
         if (todo < parallelism && !hasBeenPulled(in)) tryPull(in)
       }
 
       override def onUpstreamFinish(): Unit = {
-        if (todo == 0) completeStage()
+        if (todo == 0 && !isAvailable(in)) closeStage()
       }
 
       setHandlers(in, out, this)
@@ -288,7 +291,7 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
       override def teleporterFailure(ex: Throwable): Unit = {
         super.teleporterFailure(ex)
         matchRule(ex).foreach { rule ⇒
-          if (retries / retriesBuffer.size() < rule.directive.retries || rule.directive.retries == 0) {
+          if (rule.directive.retries == -1 || (retriesBuffer.isEmpty || (!retriesBuffer.isEmpty && retries / retriesBuffer.size() < rule.directive.retries))) {
             rule.directive.delay match {
               case Duration.Zero ⇒ decide(ex, rule.directive)
               case d: FiniteDuration ⇒ scheduleOnce((ex, rule.directive), d)
@@ -312,7 +315,7 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
 
       override def resume(ex: Throwable): Unit = {
         inFlight -= 1
-        if (isClosed(in) && todo == 0) completeStage()
+        if (isClosed(in) && todo == 0) closeStage()
         else if (!hasBeenPulled(in)) tryPull(in)
       }
 

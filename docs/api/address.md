@@ -13,7 +13,7 @@
 + Response 200 (application/json)
 ```javascript
 {
-	"_id": "/address/test/test_kafka_consumer",
+	"key": "/address/{namespace}/{key}",
 	"value": `{
 		"name": "",
 		"key": "test_kafka_consumer",
@@ -35,9 +35,11 @@
 
 ## Save [POST /config]
 + Body
+
+kafka_consumer:
 ```javascript
 {
-	"_id": "/address/test/test_kafka_consumer",
+	"key": "/address/{namespace}/{key}",
 	"value": `{
 		"name": "",
 		"key": "test_kafka_consumer",
@@ -53,6 +55,60 @@
 		"category": "kafka_consumer",
 		"arguments": {}
 	}`
+}
+```
+kafka_producer:
+```javascript
+{
+	"key": "/address/{namespace}/{key}",
+	"value": `{
+              	"key": "test",
+              	"name": "",
+              	"client": {
+              		"bootstrap.servers": "localhost:9092",
+              		"acks": 1,
+              		"key.serializer": "org.apache.kafka.common.serialization.ByteArraySerializer",
+              		"value.serializer": "org.apache.kafka.common.serialization.ByteArraySerializer",
+              		"compression.type": "gzip"
+              	},
+              	"arguments": {},
+              	"category": "kafka_producer"
+              }`
+}
+```
+hdfs:
+```javascript
+{
+	"key": "/address/{namespace}/{key}",
+	"value": `{
+              	"key": "test",
+              	"name": "",
+              	"client": {
+              		"bootstrap.servers": "localhost:9092",
+              		"acks": 1,
+              		"key.serializer": "org.apache.kafka.common.serialization.ByteArraySerializer",
+              		"value.serializer": "org.apache.kafka.common.serialization.ByteArraySerializer",
+              		"compression.type": "gzip"
+              	},
+              	"arguments": {},
+              	"category": "kafka_producer"
+              }`
+}
+```
+elasticsearch:
+```javascript
+{
+	"key": "/address/{namespace}/{key}",
+	"value": `{
+              	"key": "",
+              	"name": "",
+              	"client": {
+              		"hosts": "localhost:9300,localhost:9301",
+              		"setting": {}
+              	},
+              	"arguments": {},
+              	"category": "elasticsearch"
+              }`
 }
 ```
 + Response 200 (application/json)
