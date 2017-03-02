@@ -13,12 +13,12 @@
 + Response 200 (application/json)
 ```javascript
 {
-	"key": "/group/subscriber/shopGroup",
+	"key": "/group/ns/group",
 	"value": `{
 		"id": 13,
-		"key": "shopGroup",
-		"tasks": ["/task/subscriber/subscriberShop"],
-		"instances": ["/instance/subscriber/kuidai_pc"],
+		"key": "group",
+		"tasks": ["/task/group/test1"],
+		"instances": ["/instance/test/kuidai_pc"],
 		"instanceOfflineReBalanceTime": "Inf"
 	}`
 }
@@ -28,11 +28,11 @@
 + Body
 ```javascript
 {
-	"key": "/group/subscriber/shopGroup",
+	"key": "/group/ns/group",
 	"value": `{
-		"key": "shopGroup",
-		"tasks": ["/task/subscriber/subscriberShop"],
-		"instances": ["/instance/subscriber/kuidai_pc"],
+		"key": "key",
+		"tasks": ["/task/ns/tasks"],
+		"instances": ["/instance/ns/kuidai_pc"],
 		"instanceOfflineReBalanceTime": "Inf"
 	}`
 }

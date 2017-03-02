@@ -23,7 +23,7 @@
 			"zookeeper.connection.timeout.ms": 60000,
 			"auto.commit.enable": "false",
 			"group.id": "test",
-			"zookeeper.connect": "172.18.21.83:2181",
+			"zookeeper.connect": "127.0.0.83:2181",
 			"zookeeper.session.timeout.ms": 60000,
 			"zookeeper.sync.time.ms": 30000
 		},
@@ -48,7 +48,7 @@ kafka_consumer:
 			"zookeeper.connection.timeout.ms": 60000,
 			"auto.commit.enable": "false",
 			"group.id": "test",
-			"zookeeper.connect": "172.18.21.83:2181",
+			"zookeeper.connect": "127.0.0.83:2181",
 			"zookeeper.session.timeout.ms": 60000,
 			"zookeeper.sync.time.ms": 30000
 		},

@@ -13,7 +13,7 @@
 + Response 200 (application/json)
 ```javascript
 {
-	"key": "/broker/subscriber/1",
+	"key": "/broker/ns/1",
 	"value": `{
 			"ip": "localhost",
 			"key": "1",
@@ -28,7 +28,7 @@
 + Body
 ```javascript
 {
-	"key": "/broker/subscriber/1",
+	"key": "/broker/ns/1",
 	"value": `{
 			"ip": "localhost",
 			"key": "1",

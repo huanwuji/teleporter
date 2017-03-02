@@ -1,5 +1,5 @@
-# Namespace
-## Namespaces [GET /config/range]
+# Variable
+## Variables [GET /config/range]
 + Parameters:
     - key: /ns/{key} (string)
     - start: 1 (number)
@@ -7,16 +7,21 @@
 + Response 200 (application/json)
     
     
-## Namespace [GET /config]
+## Variable [GET /config]
 + Parameters:
     - key: /ns/{key} (string)
 + Response 200 (application/json)
 ```javascript
 {
-	"key": "/ns/key",
+	"key": "/variable/ns/env_pre",
 	"value": `{
-		"id": 3,
-		"key": "key"
+		"arguments": {
+			"host": "www.baidu.com",
+			"port": "80",
+		},
+		"key": "env_pre",
+		"name": "",
+		"id": 7
 	}`
 }
 ```
@@ -25,10 +30,14 @@
 + Body
 ```javascript
 {
-	"key": "/ns/key",
+	"key": "/variable/ns/env_pre",
 	"value": `{
-		"id": 3,
-		"key": "key"
+		"arguments": {
+			"host": "www.baidu.com",
+			"port": "80",
+		},
+		"key": "env_pre",
+		"name": "",
 	}`
 }
 ```

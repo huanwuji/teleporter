@@ -13,12 +13,12 @@
 + Response 200 (application/json)
 ```javascript
 {
-	"key": "/task/subscriber/subscriberShop",
+	"key": "/task/ns/key",
 	"value": `{
 		"id": 9,
-		"key": "subscriberShop",
+		"key": "key",
 		"name": "",
-		"group": "/group/subscriber/shopGroup",
+		"group": "/group/ns/group",
 		"extraKeys": {},
 		"arguments": {},
 		"template": ""
@@ -30,11 +30,11 @@
 + Body
 ```javascript
 {
-	"key": "/task/subscriber/subscriberShop",
+	"key": "/task/ns/key",
 	"value": `{
-		"key": "subscriberShop",
+		"key": "key",
 		"name": "",
-		"group": "/group/subscriber/shopGroup",
+		"group": "/group/ns/key",
 		"extraKeys": {},
 		"arguments": {},
 		"template": ""

@@ -13,11 +13,11 @@
 + Response 200 (application/json)
 ```javascript
 {
-	"key": "/instance/subscriber/kuidai_pc",
+	"key": "/instance/ns/kuidai_pc",
 	"value": `{
 		"id": 14,
 		"key": "kuidai_pc",
-		"group": "/group/subscriber/shopGroup"
+		"group": "/group/ns/group"
 	}`
 }
 ```
@@ -26,10 +26,10 @@
 + Body
 ```javascript
 {
-	"key": "/instance/subscriber/kuidai_pc",
+	"key": "/instance/ns/kuidai_pc",
 	"value": `{
 		"key": "kuidai_pc",
-		"group": "/group/subscriber/shopGroup"
+		"group": "/group/ns/key"
 	}`
 }
 ```
