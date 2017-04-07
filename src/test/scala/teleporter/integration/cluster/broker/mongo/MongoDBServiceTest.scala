@@ -12,7 +12,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
   * Created by huanwuji on 2016/12/1.
   */
 class MongoDBServiceTest extends FunSuite {
-  val mongoClient = MongoClient("mongodb://172.18.21.213:27017")
+  val mongoClient = MongoClient("mongodb://localhost:27017")
   val database: MongoDatabase = mongoClient.getDatabase("teleporter")
 
 
