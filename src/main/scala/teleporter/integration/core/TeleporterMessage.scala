@@ -39,11 +39,23 @@ object TId {
 
 trait Message[+T] {
   def data: T
+
+  def map[B](f: T ⇒ B): Message[B]
+
+  def to[B](data: B): Message[B]
 }
 
-case class DefaultMessage[T](data: T) extends Message[T]
+case class DefaultMessage[T](data: T) extends Message[T] {
+  override def map[B](f: (T) ⇒ B): DefaultMessage[B] = this.copy(data = f(data))
 
-case class SourceMessage[XY, T](coordinate: XY, data: T) extends Message[T]
+  override def to[B](data: B): Message[B] = this.copy(data = data)
+}
+
+case class SourceMessage[XY, T](coordinate: XY, data: T) extends Message[T] {
+  override def map[B](f: (T) ⇒ B): Message[B] = this.copy(data = f(data))
+
+  override def to[B](data: B): Message[B] = this.copy(data = data)
+}
 
 case class AckMessage[XY, T](id: TId, coordinate: XY, data: T, confirmed: TId ⇒ Unit) extends Message[T] {
   def toTransferMessage: TransferMessage[T] = TransferMessage(id, data)
@@ -51,9 +63,15 @@ case class AckMessage[XY, T](id: TId, coordinate: XY, data: T, confirmed: TId �
   def map[B](f: T ⇒ B): AckMessage[XY, B] = this.copy(data = f(data))
 
   def toMessage[B]: Message[B] = asInstanceOf[Message[B]]
+
+  override def to[B](data: B): Message[B] = this.copy(data = data)
 }
 
-case class TransferMessage[T](id: TId, data: T) extends Message[T]
+case class TransferMessage[T](id: TId, data: T) extends Message[T] {
+  override def to[B](data: B): Message[B] = this.copy(data = data)
+
+  override def map[B](f: (T) ⇒ B): Message[B] = this.copy(data = f(data))
+}
 
 object Message {
   def apply[T](data: T) = DefaultMessage(data)

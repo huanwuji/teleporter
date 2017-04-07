@@ -11,8 +11,8 @@
 
     <div class="form-group">
       <label for="category" class="col-sm-2 control-label">category</label>
-      <select class="form-control" id="category" (change)="categoryChange($event)">
-        <option value="kafka">kafka</option>
+      <select formControlName="category" class="form-control" id="category" (change)="categoryChange($event)">
+        <option value="kafka_consumer">kafka_consumer</option>
         <option value="jdbc">jdbc</option>
         <option value="mongo">mongo</option>
         <option value="hdfs">hdfs</option>

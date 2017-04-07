@@ -66,7 +66,7 @@ export class SourceService extends ConfigService<Source> {
 
   private getSourceComponentItems(category: string) {
     switch (category) {
-      case 'kafka':
+      case 'kafka_consumer':
         return [
           this.getAckItems(),
           new GroupFormItem({

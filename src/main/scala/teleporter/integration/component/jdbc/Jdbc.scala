@@ -7,7 +7,7 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.stream.{Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
-import teleporter.integration.component.Roller.RollerContext
+import teleporter.integration.component.SourceRoller.RollerContext
 import teleporter.integration.component._
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics
@@ -20,7 +20,7 @@ import scala.util.control.NonFatal
   * author: huanwuji
   * created: 2015/8/2.
   */
-object Jdbc {
+trait Jdbc {
   def sourceAck(sourceKey: String)
                (implicit center: TeleporterCenter): Source[AckMessage[MapBean, JdbcMessage], NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
@@ -69,20 +69,45 @@ object Jdbc {
   def address(addressKey: String)(implicit center: TeleporterCenter): AutoCloseClientRef[HikariDataSource] = {
     val config = center.context.getContext[AddressContext](addressKey).config
     val props = new Properties()
-    config.client.toMap.foreach {
+    prepareProperties(config.mapTo[JdbcAddressMetaBean]).foreach {
       case (k, v) if v != null && v.toString.nonEmpty ⇒
         props.put(k, v.toString)
     }
     val hikariConfig = new HikariConfig(props)
+    hikariConfig.setPoolName(addressKey)
     AutoCloseClientRef(addressKey, new HikariDataSource(hikariConfig))
   }
+
+  protected def prepareProperties(map: JdbcAddressMetaBean): Map[String, Any] = map.client.toMap
+}
+
+object Jdbc extends Jdbc
+
+object JdbcAddressMetaBean {
+  val FHost = "host"
+  val FDatabase = "database"
+  val FUsername = "username"
+  val FPassword = "password"
+}
+
+class JdbcAddressMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
+
+  import JdbcAddressMetaBean._
+
+  def host: String = client[String](FHost)
+
+  def database: String = client[String](FDatabase)
+
+  def username: String = client[String](FUsername)
+
+  def password: String = client[String](FPassword)
 }
 
 object JdbcSourceMetaBean {
   val FSql = "sql"
 }
 
-class JdbcSourceMetaBean(override val underlying: JdbcMessage) extends SourceMetaBean(underlying) {
+class JdbcSourceMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
 
   import JdbcSourceMetaBean._
 
@@ -93,7 +118,7 @@ object JdbcSinkMetaBean {
   val FParallelism = "parallelism"
 }
 
-class JdbcSinkMetaBean(override val underlying: JdbcMessage) extends SinkMetaBean(underlying) {
+class JdbcSinkMetaBean(override val underlying: Map[String, Any]) extends SinkMetaBean(underlying) {
 
   import JdbcSinkMetaBean._
 
@@ -138,6 +163,8 @@ class JdbcSource(sql: String, rollerContext: RollerContext, _create: () ⇒ Data
 class JdbcSink(parallelism: Int, _create: (ExecutionContext) ⇒ Future[DataSource],
                _close: (DataSource, ExecutionContext) ⇒ Future[Done])(implicit val center: TeleporterCenter)
   extends CommonSinkAsyncUnordered[DataSource, Message[JdbcRecord], Message[JdbcRecord]]("jdbc.sink", parallelism) with SqlSupport {
+  override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
+
   override def create(executionContext: ExecutionContext): Future[DataSource] = _create(executionContext)
 
   override def write(client: DataSource, elem: Message[JdbcRecord], executionContext: ExecutionContext): Future[Message[JdbcRecord]] = {

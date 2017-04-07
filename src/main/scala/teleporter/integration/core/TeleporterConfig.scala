@@ -187,7 +187,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
   import TeleporterConfigActor._
   import context.dispatcher
 
-  implicit val timeout: Timeout = 2.minutes
+  implicit val timeout: Timeout = 30.seconds
 
   override def receive: Receive = {
     case LoadPartition(key, trigger) ⇒ loadPartition(key, trigger) pipeTo sender()
@@ -291,7 +291,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
             center.context.ref ! Upsert(sourceContext, trigger)
             sourceContext
           }
-        case _ ⇒ Future.successful(sourceContext)
+        case _ ⇒ center.context.ref ! Upsert(sourceContext, trigger); Future.successful(sourceContext)
       }
     }
   }
@@ -313,7 +313,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
               center.context.ref ! Upsert(sourceContext, trigger)
               sourceContext
             }
-          case _ ⇒ Future.successful(sourceContext)
+          case _ ⇒ center.context.ref ! Upsert(sourceContext, trigger); Future.successful(sourceContext)
         }
       }
       Futures.sequence(sourceContexts.asJava, dispatcher)
@@ -336,7 +336,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
             center.context.ref ! Upsert(sinkContext, trigger)
             sinkContext
           }
-        case _ ⇒ Future.successful(sinkContext)
+        case _ ⇒ center.context.ref ! Upsert(sinkContext, trigger); Future.successful(sinkContext)
       }
     }
   }
@@ -358,7 +358,7 @@ class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: Ev
               center.context.ref ! Upsert(sinkContext, trigger)
               sinkContext
             }
-          case _ ⇒ Future.successful(sinkContext)
+          case _ ⇒ center.context.ref ! Upsert(sinkContext, trigger); Future.successful(sinkContext)
         }
       }
       Futures.sequence(sinkContexts.asJava, dispatcher)
@@ -400,6 +400,8 @@ trait TeleporterConfigClient extends Logging {
 
   import center.system.dispatcher
 
+  private implicit val timeout: Timeout = 10.seconds
+
   def streamStatus(key: String, status: String): Unit = {
     val context = center.context.getContext[StreamContext](key)
     val streamConfig = context.config
@@ -421,41 +423,45 @@ trait TeleporterConfigClient extends Logging {
 
   def getConfig(key: String): Future[KeyValue] = {
     require(key.nonEmpty, "Key can't empty to load")
-    center.eventListener.asyncEvent { seqNr ⇒
+    center.eventListener.asyncEvent({ seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVGet, body = KVGet(key))
       )
-    }._2.map(e ⇒ e.toBody[EventBody.KV].keyValue)
+    }, center.eventListener.timeoutMessageHandler(s"get $key"))
+      ._2.map(e ⇒ e.toBody[EventBody.KV].keyValue)
   }
 
   def getRangeRegexConfig(key: String, start: Int = 0, limit: Int = Int.MaxValue): Future[Seq[KeyValue]] = {
-    center.eventListener.asyncEvent { seqNr ⇒
+    center.eventListener.asyncEvent({ seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent(seqNr = seqNr, eventType = EventType.RangeRegexKV, role = Role.Request,
           body = Some(EventBody.RangeRegexKV(key = key, start = start, limit = limit)))
       )
-    }._2.map(e ⇒ e.toBody[KVS].kvs.map(kv ⇒ KeyValue(kv.key, kv.value)))
+    }, center.eventListener.timeoutMessageHandler(s"get range $key"))
+      ._2.map(e ⇒ e.toBody[KVS].kvs.map(kv ⇒ KeyValue(kv.key, kv.value)))
   }
 
   def save(key: String, value: String): Future[Done] = {
-    center.eventListener.asyncEvent { seqNr ⇒
+    center.eventListener.asyncEvent({ seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVSave,
           body = EventBody.KV(key = key, value = value))
       )
-    }._2.map {
+    }, center.eventListener.timeoutMessageHandler(s"save $key"))
+      ._2.map {
       case e if e.status == EventStatus.Success ⇒ Done
       case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
     }
   }
 
   def atomicSave(key: String, expect: String, update: String): Future[Boolean] = {
-    center.eventListener.asyncEvent { seqNr ⇒
+    center.eventListener.asyncEvent({ seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent.request(seqNr = seqNr, eventType = EventType.AtomicSaveKV,
           body = EventBody.AtomicKV(key = key, expect = expect, update = update))
       )
-    }._2.map {
+    }, center.eventListener.timeoutMessageHandler(s"atomic save $key"))
+      ._2.map {
       e ⇒
         if (e.status == EventStatus.Failure) {
           logger.warn(s"$key save failed, ${e.message}")
@@ -465,24 +471,26 @@ trait TeleporterConfigClient extends Logging {
   }
 
   def remove(key: String): Future[Done] = {
-    center.eventListener.asyncEvent { seqNr ⇒
+    center.eventListener.asyncEvent({ seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVRemove,
           body = EventBody.KVRemove(key = key))
       )
-    }._2.map {
+    }, center.eventListener.timeoutMessageHandler(s"remove $key"))
+      ._2.map {
       case e if e.status == EventStatus.Success ⇒ Done
       case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
     }
   }
 
   def notify(key: String, action: Byte): Future[Done] = {
-    center.eventListener.asyncEvent { seqNr ⇒
+    center.eventListener.asyncEvent({ seqNr ⇒
       center.brokers ! SendMessage(
         TeleporterEvent.request(seqNr = seqNr, eventType = EventType.ConfigChangeNotify,
           body = ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()))
       )
-    }._2.map {
+    }, center.eventListener.timeoutMessageHandler(s"notify $key"))
+      ._2.map {
       case e if e.status == EventStatus.Success ⇒ Done
       case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
     }

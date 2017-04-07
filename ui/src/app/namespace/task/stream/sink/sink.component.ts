@@ -1,9 +1,9 @@
 import {Component, OnInit} from "@angular/core";
 import {ActivatedRoute, Router} from "@angular/router";
-import {SinkService, Sink} from "./sink.service";
+import {Sink, SinkService} from "./sink.service";
 import {KeyBean} from "../../../../rest.servcie";
 import {FormItemBase} from "../../../../dynamic/form/form-item";
-import {FormGroup, FormControl} from "@angular/forms";
+import {FormControl, FormGroup} from "@angular/forms";
 import {FormItemService} from "../../../../dynamic/form/form-item.service";
 
 @Component({
@@ -31,7 +31,7 @@ export class SinkListComponent implements OnInit {
   }
 
   list() {
-    this.sinkService.range(`/sink/${this.ns}/${this.task}/${this.stream}`)
+    this.sinkService.range(`/sink/${this.ns}/${this.task}/${this.stream}/`)
       .then(kbs => this.kbs = kbs);
   }
 
@@ -52,7 +52,7 @@ export class SinkListComponent implements OnInit {
 })
 export class SinkDetailComponent implements OnInit {
   private formItems: FormItemBase<any>[];
-  private formGroup: FormGroup = new FormGroup({"": new FormControl()});
+  private formGroup: FormGroup = new FormGroup({"category": new FormControl("kafka")});
   private payLoad: string;
   private ns: string;
   private task: string;
@@ -89,7 +89,8 @@ export class SinkDetailComponent implements OnInit {
   }
 
   setForm(value: any) {
-    let category = value.category || 'kafka';
+    let category = value.category || 'kafka_producer';
+    if (category == 'kafka') category = 'kafka_producer';
     let form = this.formItemService.toForm(this.sinkService.getFormItems(category), value);
     this.formItems = form.formItems;
     form.formGroup.addControl('category', new FormControl(category));

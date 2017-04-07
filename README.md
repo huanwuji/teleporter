@@ -69,10 +69,10 @@ object StreamExample extends StreamLogic {
         updateSql("table_name", "id", data),
         insertIgnoreSql("table_name", data)
       ))).toMessage)
-      .viaMat(KillSwitches.single)(Keep.right).watchTermination()(Keep.both)
       .via(Jdbc.flow("/source/ns/task/stream/sink"))
-      .to(SourceAck.confirmSink())
-      .run()
+      .via(SourceAck.confirmFlow())
+      .viaMat(KillSwitches.single)(Keep.right).watchTermination()(Keep.both)
+      .to(Sink.ignore).run()
   }
 }
 ```
@@ -82,7 +82,13 @@ Metrics use influxdb show as chartjs, this statistics rate, error count etc.
 #### Instance
 instance is only a executor streams. Write back state. Give the instance a unique key, and then config the relation for task on UI. It's will auto exec.
 
-#### Rest Api
+#### Metrics
+Use [influxdb](https://www.influxdata.com) as metrics storage.
+Storage format:
+ - simple count
+    > Use at source and sink: key  start=1493439,end=1339493,count=39483
+ - error count
+    > key,status=ERROR,level=(DEBUG|INFO|WARN|ERROR)  start=1493439,end=1339493,count=39483
 
 ##About
 The idea from camel and spring integration,  and I will use akka-streaming, reactive-streams-jvm

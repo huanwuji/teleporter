@@ -21,7 +21,7 @@ export class NamespaceListComponent implements OnInit {
   }
 
   list() {
-    this.namespaceService.range('/ns')
+    this.namespaceService.range('/ns/')
       .then(kbs => this.kbs = kbs);
   }
 

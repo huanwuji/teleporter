@@ -25,7 +25,7 @@ export class BrokerListComponent implements OnInit {
   }
 
   list() {
-    this.brokerService.range(`/broker/${this.ns}`)
+    this.brokerService.range(`/broker/${this.ns}/`)
       .then((kbs: KeyBean<Broker>[]) => this.kbs = kbs);
   }
 

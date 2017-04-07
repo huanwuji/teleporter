@@ -14,7 +14,6 @@ import com.markatta.akron.{CronExpression, CronTab}
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.core.Streams.{ExecuteStream, _}
 import teleporter.integration.script.ScriptEngines
-import teleporter.integration.utils.CronFixed
 
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
@@ -54,14 +53,13 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
         case _ ⇒
       }
     case CronCommand(command, cron) ⇒
-      val fixedCron = CronFixed.fixed(cron)
       cronCache.remove(command).foreach {
         jobId ⇒
           logger.info(s"Cancel exists cron job, $command, $jobId")
           center.crontab ! UnSchedule(jobId)
-          center.crontab ! CronTab.Schedule(self, command, CronExpression(fixedCron))
+          center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
       }
-      center.crontab ! CronTab.Schedule(self, command, CronExpression(fixedCron))
+      center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
     case cronSchedule@CronTab.Scheduled(jobId, _, message) ⇒
       logger.info(s"CronSchedule $cronSchedule was start")
       cronCache += (message → jobId)
@@ -112,6 +110,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
   def stop(key: String): Future[Done] = {
     streamStates.get(key) match {
       case Some(state) ⇒
+        logger.info(s"Stream $key will shutdown")
         val (killSwitch, fu) = state.returnValues
         killSwitch.shutdown()
         fu
@@ -120,22 +119,28 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
   }
 
   def executeStream(key: String, template: String): Unit = {
-    val streamLogic = streamLogicCache.get(Hashing.md5().hashString(template, Charsets.UTF_8).toString,
-      new Callable[StreamLogic]() {
-        override def call(): StreamLogic = {
-          ScriptEngines.scala.eval(template).asInstanceOf[StreamLogic]
-        }
-      })
-    logger.info(s"$key stream will executed")
-    val result = streamLogic(key, center)
-    streamStates += key → StreamState(result)
-    result._2.andThen { case _ ⇒ center.context.unRegister(key) }
+    val fu = try {
+      logger.info(s"$key stream will executed")
+      val streamLogic = streamLogicCache.get(Hashing.md5().hashString(template, Charsets.UTF_8).toString,
+        new Callable[StreamLogic]() {
+          override def call(): StreamLogic = {
+            ScriptEngines.scala.eval(template).asInstanceOf[StreamLogic]
+          }
+        })
+      val result = streamLogic(key, center)
+      streamStates += key → StreamState(result)
+      result._2
+    } catch {
+      case ex: Exception ⇒ Future.failed(ex)
+    }
+    fu.andThen { case _ ⇒ center.context.unRegister(key) }
       .onComplete {
         case Success(v) ⇒
           center.client.streamStatus(key, StreamStatus.COMPLETE)
           logger.info(s"$key was completed, $v")
         case Failure(e) ⇒
           center.client.streamStatus(key, StreamStatus.FAILURE)
+          center.context.getContext[StreamContext](key).decider.teleporterFailure(e)
           logger.warn(s"$key execute failed", e)
       }
   }

@@ -6,6 +6,7 @@ import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.stream.{Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import com.stumbleupon.async.Callback
+import org.apache.kudu.Common.DataType
 import org.apache.kudu.client.SessionConfiguration.FlushMode
 import org.apache.kudu.client._
 import org.apache.logging.log4j.scala.Logging
@@ -13,7 +14,9 @@ import teleporter.integration.component._
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics
 import teleporter.integration.utils.Bytes.toBytes
+import teleporter.integration.utils.Converters._
 
+import scala.collection.JavaConversions._
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
@@ -23,15 +26,18 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
 object Kudu {
   def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[KuduRecord], Message[KuduRecord], NotUsed] = {
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
+    val sinkConfig = sinkContext.config.mapTo[KuduSinkMetaBean]
     val bind = Option(sinkContext.config.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
-    Flow.fromGraph(new KuduSinkAsync(1,
-      (ec) ⇒ Future {
+    Flow.fromGraph(new KuduSinkAsync(
+      parallelism = sinkConfig.parallelism,
+      autoFit = sinkConfig.autoFit,
+      _create = (ec) ⇒ Future {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
-      }(ec), {
-        (_, _) ⇒
-          center.context.unRegister(addressKey, bind)
-          Future.successful(Done)
+      }(ec),
+      _close = (_, _) ⇒ {
+        center.context.unRegister(addressKey, bind)
+        Future.successful(Done)
       }))
       .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
       .via(Metrics.count[Message[KuduRecord]](sinkKey)(center.metricsRegistry))
@@ -50,7 +56,55 @@ object Kudu {
   }
 }
 
+object KuduSinkMetaBean {
+  val FParallelism = "parallelism"
+  val FAutoFit = "autoFit"
+}
+
+class KuduSinkMetaBean(override val underlying: Map[String, Any]) extends SinkMetaBean(underlying) {
+
+  import KuduSinkMetaBean._
+
+  def parallelism: Int = client.get[Int](FParallelism).getOrElse(1)
+
+  def autoFit: String = client.get[String](FAutoFit).getOrElse("DEFAULT")
+}
+
 trait KuduSupport {
+  def addRowsBySchema(operation: Operation, binds: Map[String, Any], table: KuduTable): Operation = {
+    val row = operation.getRow
+    table.getSchema.getColumns.foreach { column ⇒
+      binds.get(column.getName) match {
+        case Some(value) ⇒
+          column.getType.getDataType match {
+            case DataType.STRING ⇒
+              addValueOrNull[String](asNonEmptyString(value), row.addString(column.getName, _), row.setNull(column.getName))
+            case DataType.INT16 ⇒
+              addValueOrNull[Short](asShort(value), row.addShort(column.getName, _), row.setNull(column.getName))
+            case DataType.INT32 ⇒
+              addValueOrNull[Int](asInt(value), row.addInt(column.getName, _), row.setNull(column.getName))
+            case DataType.INT64 ⇒
+              addValueOrNull[Long](asLong(value), row.addLong(column.getName, _), row.setNull(column.getName))
+            case DataType.DOUBLE ⇒
+              addValueOrNull[Double](asDouble(value), row.addDouble(column.getName, _), row.setNull(column.getName))
+            case DataType.FLOAT ⇒
+              addValueOrNull[Float](asFloat(value), row.addFloat(column.getName, _), row.setNull(column.getName))
+            case DataType.BOOL ⇒
+              addValueOrNull[Boolean](asBoolean(value), row.addBoolean(column.getName, _), row.setNull(column.getName))
+            case DataType.BINARY ⇒
+              addValueOrNull[Array[Byte]](asBytes(value), row.addBinary(column.getName, _), row.setNull(column.getName))
+          }
+        case None ⇒ row.setNull(column.getName)
+      }
+    }
+    operation
+  }
+
+  protected def addValueOrNull[T](value: Option[T], add: T ⇒ Unit, default: ⇒ Unit): Unit = value match {
+    case Some(v) ⇒ add(v)
+    case None ⇒ default
+  }
+
   def addRows(operation: Operation, binds: Map[String, Any]): Operation = {
     val row = operation.getRow
     binds.foreach {
@@ -82,11 +136,11 @@ sealed trait KuduAction {
   val version: Long
 }
 
-case class KuduInsert(table: String, binds: Map[String, Any], version: Long = -1) extends KuduAction
+case class KuduInsert(table: String, binds: Map[String, Any] = Map.empty, version: Long = -1) extends KuduAction
 
-case class KuduUpdate(table: String, binds: Map[String, Any], version: Long = -1) extends KuduAction
+case class KuduUpdate(table: String, binds: Map[String, Any] = Map.empty, version: Long = -1) extends KuduAction
 
-case class KuduUpsert(table: String, binds: Map[String, Any], version: Long = -1) extends KuduAction
+case class KuduUpsert(table: String, binds: Map[String, Any] = Map.empty, version: Long = -1) extends KuduAction
 
 object KuduMetaBean {
   val FKuduMaster = "kuduMaster"
@@ -102,10 +156,11 @@ class KuduMetaBean(override val underlying: Map[String, Any]) extends AddressMet
   def workerCount: Int = client[Int](FWorkerCount)
 }
 
-class KuduSinkAsync(parallelism: Int = 1,
+class KuduSinkAsync(parallelism: Int,
+                    autoFit: String,
                     _create: (ExecutionContext) ⇒ Future[AsyncKuduClient],
                     _close: (AsyncKuduClient, ExecutionContext) ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[AsyncKuduClient, Message[KuduRecord], Message[KuduRecord]]("kafka.sink", parallelism) with KuduSupport with Logging {
+  extends CommonSinkAsyncUnordered[AsyncKuduClient, Message[KuduRecord], Message[KuduRecord]]("kudu.sink", parallelism) with KuduSupport with Logging {
   val tables: mutable.Map[String, KuduTable] = mutable.Map[String, KuduTable]()
   var session: AsyncKuduSession = _
 
@@ -122,13 +177,17 @@ class KuduSinkAsync(parallelism: Int = 1,
     val promise = Promise[Message[KuduRecord]]()
     val data = elem.data
     val tableName = data.table
-    val table = tables.getOrElseUpdate(tableName, client.openTable(tableName).join(5000))
-    val operation = elem match {
+    val table = tables.getOrElseUpdate(tableName, client.openTable(tableName).join(10000))
+    val operation = elem.data match {
       case _: KuduInsert ⇒ table.newInsert()
       case _: KuduUpdate ⇒ table.newUpdate()
       case _: KuduUpsert ⇒ table.newUpsert()
     }
-    session.apply(addRows(operation, data.binds))
+    val fillOperation = autoFit match {
+      case "DEFAULT" ⇒ addRows(operation, data.binds)
+      case "SCHEMA" ⇒ addRowsBySchema(operation, data.binds, table)
+    }
+    session.apply(fillOperation)
       .addCallbacks(new Callback[Object, OperationResponse] {
         override def call(arg: OperationResponse): Object = {
           if (arg.getRowError.getErrorStatus.ok()) {

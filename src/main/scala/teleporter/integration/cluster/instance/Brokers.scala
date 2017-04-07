@@ -67,10 +67,15 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
       receiverRef ! RegisterSender(senderRef)
       fu.onComplete {
         r ⇒
-          logger.warn(s"Connection was closed, $r")
+          logger.warn(s"Connection $r was closed, will reconnect after 30.seconds")
+          brokerConnections.get(broker.key).foreach {
+            brokerConnection: BrokerConnection ⇒
+              if (brokerConnection == mainBroker) {
+                mainBroker = null
+              }
+          }
           brokerConnections -= broker.key
-          self ! CreateConnection(broker)
-          self ! SelectOne
+          context.system.scheduler.scheduleOnce(30.seconds, self, CreateConnection(broker))
       }
       brokerConnections += (broker.key → BrokerConnection(senderRef, receiverRef, broker))
       self ! SelectOne
@@ -87,7 +92,7 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
           }
         case Failure(e) ⇒ logger.error(e.getLocalizedMessage, e)
       }
-    case SendMessage(event) ⇒ mainBroker.senderRef ! event
+    case SendMessage(event) ⇒ if (mainBroker != null) mainBroker.senderRef ! event
   }
 
   def loadBrokers(brokers: String)(implicit ec: ExecutionContext): Unit = {
@@ -120,7 +125,8 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
           if (idx + 1 < seedBrokerServers.size) {
             loadBrokers(seedBrokerServers, idx + 1)
           } else {
-            logger.error("Can't load any brokers")
+            logger.warn("Can't connect any broker, will retry after 1.minute")
+            context.system.scheduler.scheduleOnce(1.minute, self, LoaderBroker)
           }
       }
   }
@@ -129,7 +135,6 @@ class Brokers(seedBrokers: String, connected: Promise[Done])(implicit center: Te
 class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends Actor with Logging {
 
   var senderRef: ActorRef = _
-  val logTrace: ActorRef = context.actorOf(Props(classOf[LogTrace], center))
 
   override def receive: Receive = {
     case Status.Failure(cause) ⇒ logger.error(cause.getLocalizedMessage, cause)
@@ -152,8 +157,7 @@ class BrokerEventReceiverActor()(implicit val center: TeleporterCenter) extends 
         case Action.REMOVE ⇒ center.context.ref ! Remove(center.context.getContext(notify.key))
       }
       senderRef ! TeleporterEvent.success(event)
-    case (EventType.LogTail, event) ⇒
-      logTrace ! event
+    case (EventType.LogTail, event) ⇒ //todo
   }
 
   def errorLog: PartialFunction[Throwable, Unit] = {

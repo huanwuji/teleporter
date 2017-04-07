@@ -25,7 +25,7 @@ export class InstanceListComponent implements OnInit {
   }
 
   list() {
-    this.instanceService.range(`/instance/${this.ns}`)
+    this.instanceService.range(`/instance/${this.ns}/`)
       .then(kbs => this.kbs = kbs);
   }
 

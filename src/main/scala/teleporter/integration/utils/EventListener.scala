@@ -17,7 +17,9 @@ trait EventListener[T] {
   val system: ActorSystem
   type ErrorHandler = Long ⇒ Try[T]
 
-  def timeoutHandler(seqNr: Long): Try[T] = Failure(new TimeoutException(s"Event response timeout, seqNr: $seqNr"))
+  def timeoutHandler(seqNr: Long): Try[T] = Failure(new TimeoutException(s"Event handler timeout, seqNr: $seqNr"))
+
+  def timeoutMessageHandler(message: String)(seqNr: Long): Try[T] = Failure(new TimeoutException(s"Event handler timeout: seqNr: $seqNr, $message"))
 
   import system.dispatcher
 
@@ -36,7 +38,7 @@ trait EventListener[T] {
     (idx, promise.future)
   }
 
-  def asyncEvent(handler: Long ⇒ Unit, default: ErrorHandler = timeoutHandler)(implicit timeout: Timeout = Timeout(2.minutes)): (Long, Future[T]) = {
+  def asyncEvent(handler: Long ⇒ Unit, default: ErrorHandler = timeoutHandler)(implicit timeout: Timeout = Timeout(10.seconds)): (Long, Future[T]) = {
     val result@(seqNr, _) = registerEvents()
     handler(seqNr)
     result

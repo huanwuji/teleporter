@@ -25,7 +25,7 @@ export class GroupListComponent implements OnInit {
   }
 
   list() {
-    this.groupService.range(`/group/${this.ns}`)
+    this.groupService.range(`/group/${this.ns}/`)
       .then((kbs: KeyBean<Group>[]) => this.kbs = kbs);
   }
 

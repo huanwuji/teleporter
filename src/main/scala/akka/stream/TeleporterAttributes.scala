@@ -1,5 +1,6 @@
 package akka.stream
 
+import akka.stream.ActorAttributes.Dispatcher
 import akka.stream.Attributes.Attribute
 import teleporter.integration.core.{ConfigMetaBean, TeleporterCenter}
 import teleporter.integration.supervision.DecideRule
@@ -29,8 +30,6 @@ object TeleporterAttributes {
       TeleporterSupervisionStrategy(key, DecideRule(config), center)
     }
   }
-
-  case class Dispatcher(dispatcher: String) extends Attribute
 
   val CacheDispatcher: Dispatcher = Dispatcher("akka.teleporter.cache-dispatcher")
 

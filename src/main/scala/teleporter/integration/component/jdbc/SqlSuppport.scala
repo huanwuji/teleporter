@@ -5,9 +5,7 @@ import java.util.concurrent.TimeUnit
 import javax.sql.DataSource
 
 import com.google.common.cache.{CacheBuilder, CacheLoader, LoadingCache}
-import org.apache.commons.dbutils.DbUtils
-import teleporter.integration.script.Template
-import teleporter.integration.utils.Use
+import teleporter.integration.utils.{CaseFormats, Use}
 
 import scala.util.matching.Regex
 
@@ -23,11 +21,11 @@ case class Update(sql: Sql) extends Action
 
 sealed trait Sql
 
-case class NameSql(sql: String, binds: Map[String, Any]) extends Sql {
+case class NameSql(sql: String, binds: Map[String, Any] = Map.empty) extends Sql {
   def toPreparedSql: PreparedSql = PreparedSql(this)
 }
 
-case class PreparedSql(sql: String, params: Seq[Any]) extends Sql
+case class PreparedSql(sql: String, params: Seq[Any] = Seq.empty) extends Sql
 
 object PreparedSql {
   val paramRegex: Regex = "#\\{.+?\\}".r
@@ -64,7 +62,6 @@ object PreparedSql {
 
 case class SqlResult[T](conn: Connection, ps: Statement, rs: ResultSet, result: T) {
   def close(): Unit = {
-    DbUtils.closeQuietly(conn, ps, rs)
   }
 }
 
@@ -90,20 +87,21 @@ trait SqlSupport extends Use {
     NameSql( s"""insert ignore into $tableName (${keys.mkString(",")}) values (${nameColumns(keys)})""", data)
   }
 
-  def updateSql(tableName: String, primaryKeys: String, data: Map[String, Any]): Sql = {
-    val keys = data.keys.filter(_ == primaryKeys)
-    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $primaryKeys=${paramsDefined(primaryKeys)}""", data)
+  def updateSql(tableName: String, primaryKey: String, data: Map[String, Any]): Sql = {
+    val keys = data.keys.filterNot(_ == primaryKey)
+    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $primaryKey=${paramsDefined(primaryKey)}""", data)
   }
 
-  def updateSql(tableName: String, primaryKeys: String, version: String, data: Map[String, Any]): Sql = {
-    val keys = data.keys.filter(_ == primaryKeys)
-    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $primaryKeys=${paramsDefined(primaryKeys)} and $version > ${paramsDefined(version)}""", data)
+  def updateSql(tableName: String, primaryKey: String, version: String, data: Map[String, Any]): Sql = {
+    val keys = data.keys.filterNot(_ == primaryKey)
+    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $primaryKey=${paramsDefined(primaryKey)} and $version > ${paramsDefined(version)}""", data)
   }
 
-  def updateSql(tableName: String, primaryKeys: Seq[String], version: String, data: Map[String, Any]): Sql = {
+  def updateSql(tableName: String, primaryKeys: Seq[String], version: Option[String] = None, data: Map[String, Any]): Sql = {
     val keys = data.keySet -- primaryKeys
     val keysFilter = primaryKeys.map(keys ⇒ s"$keys=${paramsDefined(keys)}").mkString(" and ")
-    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $keysFilter and $version<${paramsDefined(version)}""", data)
+    val versionSql = version.map(v ⇒ s"and $version<${paramsDefined(v)}")
+    NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $keysFilter $versionSql""", data)
   }
 
   def update(conn: Connection, sql: Sql): Int =
@@ -132,19 +130,11 @@ trait SqlSupport extends Use {
         }
     }
 
-  def toMap(rs: ResultSet): Map[String, Any] = {
-    val metaData = rs.getMetaData
-    (1 to rs.getMetaData.getColumnCount).foldLeft(Map.newBuilder[String, Any]) { (b, i) ⇒
-      val label = metaData.getColumnLabel(i)
-      b += (label → rs.getObject(i))
-    }.result()
-  }
-
   def bulkQueryToMap(conn: Connection, preparedSql: PreparedSql): SqlResult[Iterator[Map[String, Any]]] = {
-    bulkQuery(conn, preparedSql)(toMap)
+    bulkQuery(conn, preparedSql)(ResultSetMapper.MapResultSetMapper)
   }
 
-  def bulkQuery[T](conn: Connection, preparedSql: PreparedSql)(mapper: ResultSet ⇒ T): SqlResult[Iterator[T]] = {
+  def bulkQuery[T](conn: Connection, preparedSql: PreparedSql)(implicit resultSetMapper: ResultSetMapper[T]): SqlResult[Iterator[T]] = {
     var ps: PreparedStatement = null
     var rs: ResultSet = null
     try {
@@ -169,7 +159,7 @@ trait SqlSupport extends Use {
             if (isTakeOut) {
               _next = rs.next()
               isTakeOut = false
-              if (!_next) DbUtils.closeQuietly(conn, ps, rs)
+              if (!_next) SqlSupport.closeQuietly(conn, ps, rs)
               _next
             } else {
               _next
@@ -177,24 +167,20 @@ trait SqlSupport extends Use {
 
           override def next(): T = {
             isTakeOut = true
-            mapper(rs)
+            resultSetMapper.to(rs)
           }
         })
     } catch {
       case e: Exception ⇒
         logger.error(e.getLocalizedMessage, e)
-        DbUtils.closeQuietly(conn, ps, rs)
+        SqlSupport.closeQuietly(conn, ps, rs)
         throw e
     }
   }
 
-  def one(conn: Connection, preparedSql: PreparedSql): Option[Map[String, Any]] = queryToMap(conn, preparedSql).headOption
+  def one[T](conn: Connection, preparedSql: PreparedSql)(implicit resultSetMapper: ResultSetMapper[T]): Option[T] = query(conn, preparedSql).headOption
 
-  def queryToMap(conn: Connection, preparedSql: PreparedSql): Iterable[Map[String, Any]] = {
-    query(conn, preparedSql)(toMap)
-  }
-
-  def query[T](conn: Connection, preparedSql: PreparedSql)(mapper: ResultSet ⇒ T): Iterable[T] = {
+  def query[T](conn: Connection, preparedSql: PreparedSql)(implicit resultSetMapper: ResultSetMapper[T]): Iterable[T] = {
     using(conn) {
       _ ⇒
         using(conn.prepareStatement(preparedSql.sql)) {
@@ -211,12 +197,68 @@ trait SqlSupport extends Use {
                 new Iterator[T] {
                   override def hasNext: Boolean = rs.next()
 
-                  override def next(): T = mapper(rs)
+                  override def next(): T = resultSetMapper.to(rs)
                 }.toIndexedSeq
             }
         }
     }
   }
+
+  def queryToMap(conn: Connection, preparedSql: PreparedSql): Iterable[Map[String, Any]] = {
+    query(conn, preparedSql)(ResultSetMapper.MapResultSetMapper)
+  }
 }
 
-object SqlSupport extends SqlSupport
+trait ResultSetMapper[T] {
+  def to(rs: ResultSet): T
+}
+
+object ResultSetMapper {
+
+  implicit object MapResultSetMapper extends ResultSetMapper[Map[String, Any]] {
+    override def to(rs: ResultSet): Map[String, Any] = {
+      val metaData = rs.getMetaData
+      (1 to rs.getMetaData.getColumnCount).foldLeft(Map.newBuilder[String, Any]) { (b, i) ⇒
+        val label = metaData.getColumnLabel(i)
+        b += (label → rs.getObject(i))
+      }.result()
+    }
+  }
+
+  implicit object SnakeMapResultSetMapper extends ResultSetMapper[Map[String, Any]] {
+    override def to(rs: ResultSet): Map[String, Any] = {
+      val metaData = rs.getMetaData
+      (1 to rs.getMetaData.getColumnCount).foldLeft(Map.newBuilder[String, Any]) { (b, i) ⇒
+        val label = metaData.getColumnLabel(i)
+        b += (CaseFormats.UNDERSCORE_SNAKE.convert(label) → rs.getObject(i))
+      }.result()
+    }
+  }
+
+}
+
+object SqlSupport extends SqlSupport {
+  def closeQuietly(conn: Connection, stat: Statement, rs: ResultSet): Unit = {
+    try {
+      if (rs != null) rs.close()
+    } finally {
+      try {
+        if (stat != null) stat.close()
+      } finally {
+        try {
+          if (conn != null) conn.close()
+        } finally {
+          conn.close()
+        }
+      }
+    }
+  }
+}
+
+object Template {
+  val expressionParamGroupRegex: Regex = "\\{(.+?)\\}".r
+
+  def apply(template: String, params: Map[String, Any]): String = {
+    expressionParamGroupRegex.replaceAllIn(template, mh ⇒ params(mh.group(1)).toString)
+  }
+}

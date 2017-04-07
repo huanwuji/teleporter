@@ -48,7 +48,7 @@ class EventReceiveActor(configService: PersistentService,
       connectionKeepers -= this.currInstance
     case Complete ⇒
       self ! InstanceOffline(this.currInstance)
-      throw new RuntimeException("Error, Connection can't closed!")
+      logger.warn(s"Error ${this.currInstance} connection was closed!")
     case RegisterSender(ref) ⇒ senderRef = ref
     case StartPartition(partition, instance) ⇒
       logger.info(s"Assign $partition to $instance")

@@ -3,8 +3,9 @@ package teleporter.integration.cluster.broker.http
 import akka.actor.ActorRef
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{BinaryMessage, Message, TextMessage}
-import akka.http.scaladsl.model.{StatusCodes, Uri}
+import akka.http.scaladsl.model.{HttpResponse, StatusCodes}
 import akka.http.scaladsl.server.Directives._
+import akka.http.scaladsl.server.ExceptionHandler
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 import ch.megard.akka.http.cors.CorsDirectives._
@@ -37,10 +38,16 @@ object HttpServer extends Logging {
     import system.dispatcher
     implicit val serialization = native.Serialization
     implicit val formats = DefaultFormats
+
+    implicit def unCatchExceptionHandler: ExceptionHandler =
+      ExceptionHandler {
+        case e: Exception ⇒
+          logger.error(e.getMessage, e)
+          complete(HttpResponse(StatusCodes.InternalServerError, entity = e.getMessage))
+      }
+
     val route =
-      pathPrefix("ui") {
-        getFromResourceDirectory("ui")
-      } ~ cors() {
+      cors() {
         pathPrefix("config") {
           (path("atomic") & post & entity(as[AtomicKeyValue])) {
             atomicKY ⇒
@@ -112,9 +119,22 @@ object HttpServer extends Logging {
         } ~ path("ping") {
           complete("pong")
         } ~ extractUnmatchedPath {
-          _ ⇒ redirect(Uri("/ui/index.html"), StatusCodes.PermanentRedirect)
+          path ⇒
+            val pathStr = path.toString()
+            val lastSegmentIndex = pathStr.lastIndexOf("/")
+            if (lastSegmentIndex > -1 && pathStr.substring(lastSegmentIndex).indexOf(".") > -1) {
+              getFromResource("ui" + pathStr)
+            } else {
+              getFromResource("ui/index.html")
+            }
         }
       }
-    Http().bindAndHandle(handler = route, interface = host, port = port)
+    val bindFuture = Http().bindAndHandle(handler = route, interface = host, port = port)
+    bindFuture.onComplete {
+      case Success(binding) ⇒ logger.info(s"Was bind address: ${binding.localAddress}")
+      case Failure(e) ⇒
+        logger.error(e.getMessage, e)
+        System.exit(0)
+    }
   }
 }

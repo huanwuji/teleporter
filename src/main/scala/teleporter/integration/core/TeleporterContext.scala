@@ -146,9 +146,19 @@ trait TeleporterContext extends Addresses {
 
   val ref: ActorRef
 
-  def getContext[A <: ComponentContext](id: Long): A = getContextOption(id).get
+  def getContext[A <: ComponentContext](id: Long): A = {
+    val context = getContextOption(id)
+    if (context.isEmpty) {
+      throw new NoSuchElementException(s"context: $id not found")
+    } else context.get
+  }
 
-  def getContext[A <: ComponentContext](key: String): A = getContextOption(key).get
+  def getContext[A <: ComponentContext](key: String): A = {
+    val context = getContextOption(key)
+    if (context.isEmpty) {
+      throw new NoSuchElementException(s"context: $key not found")
+    } else context.get
+  }
 
   def getContextOption[A <: ComponentContext](id: Long): Option[A] = indexes.getKey1(id).asInstanceOf[Option[A]]
 

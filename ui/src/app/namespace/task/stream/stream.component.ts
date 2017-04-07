@@ -29,7 +29,7 @@ export class StreamListComponent implements OnInit {
   }
 
   private list() {
-    this.streamService.range(`/stream/${this.ns}/${this.task}`)
+    this.streamService.range(`/stream/${this.ns}/${this.task}/`)
       .then(kbs => this.kbs = kbs);
   }
 

@@ -31,7 +31,7 @@ export class SourceListComponent implements OnInit {
   }
 
   private list() {
-    this.sourceService.range(`/source/${this.ns}/${this.task}/${this.stream}`)
+    this.sourceService.range(`/source/${this.ns}/${this.task}/${this.stream}/`)
       .then(kbs => this.kbs = kbs);
   }
 
@@ -52,7 +52,7 @@ export class SourceListComponent implements OnInit {
 })
 export class SourceDetailComponent implements OnInit {
   private formItems: FormItemBase<any>[];
-  private formGroup: FormGroup = new FormGroup({"": new FormControl()});
+  private formGroup: FormGroup = new FormGroup({"category": new FormControl("kafka")});
   private payLoad: string;
   private ns: string = "";
   private task: string = "";
@@ -95,7 +95,8 @@ export class SourceDetailComponent implements OnInit {
   }
 
   setForm(value: any) {
-    let category = value.category || 'kafka';
+    let category = value.category || 'kafka_consumer';
+    if (category == 'kafka') category = 'kafka_consumer';
     let form = this.formItemService.toForm(this.sourceService.getFormItems(category), value);
     this.formItems = form.formItems;
     form.formGroup.addControl('category', new FormControl(category));

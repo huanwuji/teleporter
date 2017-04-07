@@ -3,11 +3,11 @@ import {Http} from "@angular/http";
 import "rxjs/add/operator/toPromise";
 import {ConfigService, Identity} from "../../../../rest.servcie";
 import {
-  FormItemBase,
-  TextboxFormItem,
+  ArrayFormItem,
   DynamicGroupFormItem,
+  FormItemBase,
   GroupFormItem,
-  ArrayFormItem
+  TextboxFormItem
 } from "../../../../dynamic/form/form-item";
 
 export interface Sink extends Identity {
@@ -26,7 +26,7 @@ export class SinkService extends ConfigService<Sink> {
   }
 
   getFormItems(category: string): FormItemBase<any>[] {
-    return [
+    let items = [
       new TextboxFormItem({
         key: 'id',
         label: 'id',
@@ -55,33 +55,75 @@ export class SinkService extends ConfigService<Sink> {
         key: 'errorRules',
         label: 'errorRules',
         placeholder: 'regex => reload|retry|resume|stop(delay = 1.seconds, retries = 1, next = stop)'
-      }),
-      new GroupFormItem({
-        key: 'client',
-        label: 'client',
-        value: this.getClientItems(category)
-      }),
-      new DynamicGroupFormItem({
-        key: 'arguments',
-        label: 'arguments'
-      })
-    ];
+      })];
+    items = items.concat(this.getSinkItems(category));
+    items.push(new DynamicGroupFormItem({
+      key: 'arguments',
+      label: 'arguments'
+    }));
+    return items;
   }
 
-  private getClientItems(category: string) {
+  private getSinkItems(category: string) {
     switch (category) {
-      case 'kafka':
-        return this.getKafkaItems();
+      case 'kafka_producer':
+        return [
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getKafkaItems()
+          })
+        ];
       case 'jdbc':
-        return this.getJDBCItems();
+        return [
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getJDBCItems()
+          })
+        ];
       case 'elasticsearch':
-        return this.getElasticserach();
+        return [
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getElasticserach()
+          })
+        ];
       case 'kudu':
-        return this.getKuduItems();
+        return [
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getKuduItems()
+          })
+        ];
       case 'hdfs':
-        return this.getHdfsItems();
+        return [
+          this.getRollerItems(),
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getHdfsItems()
+          })
+        ];
+      case 'hbase':
+        return [
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getHbaseItems()
+          })
+        ];
       case 'file':
-        return this.getFileItems();
+        return [
+          this.getRollerItems(),
+          new GroupFormItem({
+            key: 'client',
+            label: 'client',
+            value: this.getFileItems()
+          })
+        ];
       default:
         throw new Error(`UnMatch sink category ${category}`)
     }
@@ -93,55 +135,53 @@ export class SinkService extends ConfigService<Sink> {
 
   private getElasticserach(): FormItemBase<any>[] {
     return [
+      new TextboxFormItem({key: 'parallelism', label: 'parallelism', type: 'number', required: true, value: 1})
+    ];
+  }
+
+  private getKuduItems(): FormItemBase<any>[] {
+    return [
+      new TextboxFormItem({key: 'parallelism', label: 'parallelism', type: 'number', required: true, value: 1}),
       new TextboxFormItem({
-        key: 'parallelism',
-        label: 'parallelism',
-        type: 'number',
+        key: 'autoFit',
+        label: 'autoFit',
         required: true,
-        value: 1
+        value: 'DEFAULT',
+        placeholder: 'DEFAULT|SCHEMA'
       })
     ];
   }
 
   private getJDBCItems(): FormItemBase<any>[] {
     return [
-      new TextboxFormItem({
-        key: 'parallelism',
-        label: 'parallelism',
-        type: 'number',
-        required: true,
-        value: 1
-      })
-    ];
-  }
-
-  private getKuduItems(): FormItemBase<any>[] {
-    return [
-      new TextboxFormItem({
-        key: 'kuduMaster',
-        label: 'kuduMaster',
-        required: true,
-      }),
-      new TextboxFormItem({
-        key: 'workerCount',
-        label: 'workerCount',
-        type: 'number',
-        required: true,
-        value: 1
-      })
+      new TextboxFormItem({key: 'parallelism', label: 'parallelism', type: 'number', required: true, value: 1})
     ];
   }
 
   private getHdfsItems(): FormItemBase<any>[] {
     return [
-      new TextboxFormItem({key: 'path', label: 'path'}),
+      new TextboxFormItem({
+        key: 'path',
+        label: 'path',
+        placeholder: 'If roller is config, support /tmp/file/test_{0,date,yyyy-MM-dd}_{1}.txt'
+      }),
       new TextboxFormItem({key: 'overwrite', label: 'overwrite', value: true})
+    ];
+  }
+
+  private getHbaseItems(): FormItemBase<any>[] {
+    return [
+      new TextboxFormItem({key: 'parallelism', label: 'parallelism', type: 'number', required: true, value: 1})
     ];
   }
 
   private getFileItems(): FormItemBase<any>[] {
     return [
-      new TextboxFormItem({key: 'path', label: 'path'}),
+      new TextboxFormItem({
+        key: 'path',
+        label: 'path',
+        placeholder: 'If roller is config, support /tmp/file/test_{0,date,yyyy-MM-dd_HH:mm:ss}_{1}.txt'
+      }),
       new TextboxFormItem({key: 'offset', label: 'offset'}),
       new TextboxFormItem({
         key: 'openOptions',
@@ -150,5 +190,26 @@ export class SinkService extends ConfigService<Sink> {
         value: 'CREATE,WRITE,APPEND'
       })
     ];
+  }
+
+  private getRollerItems() {
+    return new GroupFormItem({
+      key: 'roller',
+      label: 'roller',
+      value: [
+        new TextboxFormItem({
+          key: 'cron',
+          label: 'cron',
+          required: true,
+          placeholder: "* * * * *"
+        }),
+        new TextboxFormItem({
+          key: 'size',
+          label: 'size',
+          required: true,
+          placeholder: "500MB"
+        })
+      ]
+    });
   }
 }

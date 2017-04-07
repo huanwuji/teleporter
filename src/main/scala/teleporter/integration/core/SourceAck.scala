@@ -9,6 +9,7 @@ import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.stream.stage.GraphStageLogic.StageActor
 import akka.stream.stage._
 import akka.{Done, NotUsed}
+import com.google.common.collect.EvictingQueue
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.core.TeleporterConfigActor.LoadStream
 import teleporter.integration.core.TeleporterContext.Update
@@ -215,6 +216,7 @@ object SourceAck extends Logging {
   def confirmFlow[T](): Flow[Message[T], Message[T], NotUsed] = {
     Flow[Message[T]].map {
       case m: AckMessage[_, _] ⇒ m.confirmed(m.id); m
+      case m ⇒ m
     }
   }
 
@@ -236,12 +238,11 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
     new TimerGraphStageLogic(shape) with InHandler with OutHandler {
       private def decider = inheritedAttributes.get[SupervisionStrategy].map(_.decider).getOrElse(Supervision.stoppingDecider)
 
-      private val coordinates = mutable.Queue[(Long, XY)]()
+      private val coordinates = EvictingQueue.create[(Long, XY)](config.cacheSize)
       private var lastCoordinate: XY = _
       var self: StageActor = _
       val confirmed: TId ⇒ Unit = tId ⇒ self.ref ! tId
       var expiredMessages: Iterator[AckMessage[XY, T]] = Iterator.empty
-      var lastCheck: Long = _
       @volatile var fullWait = false
 
       @scala.throws[Exception](classOf[Exception])
@@ -252,19 +253,21 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
         self = getStageActor {
           case (_, tId: TId) ⇒
             ringPool.remove(tId.seqNr, tId.channelId)
-            var latestCoordinate = coordinates.head
-            while (coordinates.head._1 < ringPool.canConfirmCursor) {
-              latestCoordinate = coordinates.dequeue()
+            var latestCoordinate: (Long, XY) = null
+            while (!coordinates.isEmpty && (coordinates.peek()._1 <= ringPool.canConfirmCursor)) {
+              latestCoordinate = coordinates.poll()
               unCommitCount += 1
             }
-            if (System.currentTimeMillis() - lastCommitTime >= config.commitInterval) {
-              commit(latestCoordinate._2)
-              ringPool.confirmed(latestCoordinate._1)
-              lastCommitTime = System.currentTimeMillis()
-              unCommitCount = 0
-            } else if (unCommitCount > 1) {
-              ringPool.confirmed(latestCoordinate._1)
-              unCommitCount = 0
+            if (latestCoordinate != null) {
+              if (System.currentTimeMillis() - lastCommitTime >= config.commitInterval) {
+                commit(latestCoordinate._2)
+                ringPool.confirmed(latestCoordinate._1)
+                lastCommitTime = System.currentTimeMillis()
+                unCommitCount = 0
+              } else if (unCommitCount > 1) {
+                ringPool.confirmed(latestCoordinate._1)
+                unCommitCount = 0
+              }
             }
             if (fullWait) {
               fullWait = false
@@ -296,7 +299,7 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
           }
           if (lastCoordinate != coordinates) {
             lastCoordinate = elem.coordinate
-            coordinates += (seqNr → lastCoordinate)
+            coordinates.offer(seqNr → lastCoordinate)
           }
         } catch {
           case NonFatal(ex) ⇒ decider(ex) match {
@@ -319,8 +322,9 @@ class SourceAck[XY, T](id: Long, config: SourceAckConfig, commit: XY ⇒ Unit, f
 
       private def tryFinish(): Unit = {
         if (ringPool.confirmEnd() && isClosed(in) && !isClosed(out)) {
+          logger.info("Is down stream really finish")
           if (lastCoordinate != null) finish(lastCoordinate)
-          completeStage()
+          super.onUpstreamFinish()
         }
       }
 

@@ -35,7 +35,7 @@ object InfluxdbMetaBean {
   val FDb = "db"
 }
 
-trait InfluxdbMetaBean extends AddressMetaBean {
+class InfluxdbMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
 
   import InfluxdbMetaBean._
 

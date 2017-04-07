@@ -11,13 +11,16 @@ if [ ! -d ../logs ];then
     mkdir ../logs
 fi
 
-control=$1
-mode=$2
+mode=$1
+control=$2
 
-jvmOpts="-server -Xmx1024m -Xms1024m -XX:+UseG1GC "
 case ${mode} in
     "broker")
-        jvmOpts="-server -Xmx512m -Xms512m -XX:+UseG1GC "
+        jvmOpts="-server -Xmx512m -Xms512m -XX:+UseG1GC"
+    ;;
+    "instance")
+        instanceArgs=$(cat ../../instance)
+        jvmOpts="-server -Xmx1024m -Xms1024m -XX:+UseG1GC ${instanceArgs}"
     ;;
 esac
 

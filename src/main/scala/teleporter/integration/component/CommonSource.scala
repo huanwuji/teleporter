@@ -3,11 +3,12 @@ package teleporter.integration.component
 import java.time.LocalDateTime
 
 import akka.Done
+import akka.stream.ActorAttributes.Dispatcher
 import akka.stream._
 import akka.stream.impl.Stages.DefaultAttributes
 import akka.stream.stage._
 import teleporter.integration
-import teleporter.integration.component.Roller.RollerContext
+import teleporter.integration.component.SourceRoller.RollerContext
 import teleporter.integration.supervision.SourceDecider
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{Dates, MapBean}
@@ -19,7 +20,7 @@ import scala.util.Try
 import scala.util.control.NonFatal
 
 /**
-  * Created by huanwuji 
+  * Created by huanwuji
   * date 2017/1/4.
   */
 class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
@@ -52,19 +53,21 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
 
   protected def pushData(): Unit = {
     readData(client) match {
-      case None ⇒ closeStage()
+      case None ⇒ closeAndThen(completeStage)
       case Some(elem) ⇒ push(shape.out, elem)
     }
   }
 
-
   @scala.throws[Exception](classOf[Exception])
-  override def onDownstreamFinish(): Unit = closeStage()
+  override def onDownstreamFinish(): Unit = {
+    logger.info("Is down stream really finish")
+    closeAndThen(super.onDownstreamFinish)
+  }
 
-  protected def closeStage(): Unit =
+  protected def closeAndThen(f: () ⇒ Unit): Unit =
     try {
       close(client)
-      completeStage()
+      f()
     } catch {
       case NonFatal(ex) ⇒ failStage(ex)
     }
@@ -81,9 +84,9 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
 
   override def teleporterFailure(ex: Throwable): Unit = {
     super.teleporterFailure(ex)
-    matchRule(ex).foreach {
-      rule ⇒
-        if (retries < rule.directive.retries) {
+    matchRule(ex) match {
+      case Some(rule) ⇒
+        if (rule.directive.retries == -1 || retries < rule.directive.retries) {
           rule.directive.delay match {
             case Duration.Zero ⇒ decide(ex, rule.directive)
             case d: FiniteDuration ⇒ scheduleOnce((ex, rule.directive), d)
@@ -93,6 +96,7 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
         } else {
           rule.directive.next.foreach(decide(ex, _))
         }
+      case None ⇒ stop(ex)
     }
   }
 
@@ -134,20 +138,7 @@ abstract class CommonSource[C, Out](name: String) extends GraphStage[SourceShape
     new CommonSourceGraphStageLogic(shape, create, readData, close, inheritedAttributes)
 }
 
-object RollerMetaBean {
-  val FRoller = "roller"
-  val FPage = "page"
-  val FPageSize = "pageSize"
-  val FMaxPage = "maxPage"
-  val FOffset = "offset"
-  val FDeadline = "deadline"
-  val FStart = "start"
-  val FEnd = "end"
-  val FPeriod = "period"
-  val FMaxPeriod = "maxPeriod"
-}
-
-object Roller {
+object SourceRoller {
 
   sealed trait State
 
@@ -163,11 +154,24 @@ object Roller {
 
   case class Timeline(start: LocalDateTime, end: LocalDateTime, period: Duration, maxPeriod: Duration, deadline: () ⇒ LocalDateTime)
 
+  object SourceRollerMetaBean {
+    val FRoller = "roller"
+    val FPage = "page"
+    val FPageSize = "pageSize"
+    val FMaxPage = "maxPage"
+    val FOffset = "offset"
+    val FDeadline = "deadline"
+    val FStart = "start"
+    val FEnd = "end"
+    val FPeriod = "period"
+    val FMaxPeriod = "maxPeriod"
+  }
+
   case class RollerContext(pagination: Option[Pagination],
                            timeline: Option[Timeline],
                            forever: Boolean, state: State) {
 
-    import RollerMetaBean._
+    import SourceRollerMetaBean._
 
     def canPaging: Boolean = pagination.exists(p ⇒ p.page <= p.maxPage)
 
@@ -225,7 +229,7 @@ object Roller {
 
   object RollerContext {
 
-    import RollerMetaBean._
+    import SourceRollerMetaBean._
 
     def merge(config: MapBean, rollerContext: RollerContext): MapBean = {
       config ++ (FRoller, rollerContext.toMap.toSeq: _*)
@@ -275,7 +279,7 @@ object Roller {
 
 abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) extends CommonSource[C, Out](name) {
 
-  import Roller._
+  import SourceRoller._
 
   var currRollerContext: RollerContext = rollerContext
   var nextContinued = true
@@ -385,7 +389,7 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
             if (currRollerContext.forever) {
               scheduleOnce('pull, currRollerContext.timeline.get.period.asInstanceOf[FiniteDuration] / 2)
             } else {
-              closeStage()
+              completeStage()
             }
           case Some(elem) ⇒ push(shape.out, elem)
         }
@@ -409,7 +413,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
   override def preStart(): Unit = {
     executeContext = {
       val mater = materializer.asInstanceOf[ActorMaterializer]
-      val dispatcherAttr = inheritedAttributes.getAttribute(classOf[TeleporterAttributes.Dispatcher])
+      val dispatcherAttr = inheritedAttributes.getAttribute(classOf[Dispatcher])
       if (dispatcherAttr.isPresent) {
         mater.system.dispatchers.lookup(dispatcherAttr.get().dispatcher)
       } else {
@@ -491,9 +495,9 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
     super.teleporterFailure(ex)
     ex match {
       case NonFatal(_) ⇒
-        matchRule(ex).foreach {
-          rule ⇒
-            if (retries < rule.directive.retries) {
+        matchRule(ex) match {
+          case Some(rule) ⇒
+            if (rule.directive.retries == -1 || retries < rule.directive.retries) {
               rule.directive.delay match {
                 case Duration.Zero ⇒ decide(ex, rule.directive)
                 case d: FiniteDuration ⇒ scheduleOnce((ex, rule.directive), d)
@@ -503,6 +507,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
             } else {
               rule.directive.next.foreach(decide(ex, _))
             }
+          case None ⇒ stop(ex)
         }
     }
   }
@@ -538,7 +543,7 @@ abstract class CommonSourceAsync[T, S](name: String) extends GraphStage[SourceSh
 abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContext)
   extends CommonSourceAsync[T, C](name) {
 
-  import Roller._
+  import SourceRoller._
 
   var currRollerContext: RollerContext = rollerContext
 

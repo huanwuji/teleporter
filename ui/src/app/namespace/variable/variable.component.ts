@@ -1,10 +1,10 @@
 import {Component, OnInit} from "@angular/core";
 import {ActivatedRoute, Router} from "@angular/router";
-import {VariableService, VariableRuntimeService, Variable} from "./variable.service";
+import {Variable, VariableRuntimeService, VariableService} from "./variable.service";
 import {KeyBean} from "../../rest.servcie";
 import {FormItemService} from "../../dynamic/form/form-item.service";
 import {FormItemBase} from "../../dynamic/form/form-item";
-import {FormGroup, FormControl} from "@angular/forms";
+import {FormControl, FormGroup} from "@angular/forms";
 
 @Component({
   selector: 'variable-list',

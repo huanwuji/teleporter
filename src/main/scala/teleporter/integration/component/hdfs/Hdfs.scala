@@ -1,6 +1,7 @@
 package teleporter.integration.component.hdfs
 
 import java.io.{InputStream, OutputStream}
+import java.security.PrivilegedExceptionAction
 import java.util.{Base64, Properties}
 
 import akka.stream.scaladsl.{Flow, Framing, Keep, Sink, Source}
@@ -11,11 +12,15 @@ import io.leopard.javahost.JavaHost
 import org.apache.commons.io.IOUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-import teleporter.integration.component.{CommonSink, CommonSource, JdbcMessage}
+import org.apache.hadoop.security.UserGroupInformation
+import org.apache.logging.log4j.scala.Logging
+import teleporter.integration.component.SinkRoller.SinkRollerSetting
+import teleporter.integration.component.{CommonSink, CommonSource, JdbcMessage, SinkRoller}
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics
 import teleporter.integration.utils.MapBean
 
+import scala.collection.mutable
 import scala.concurrent.Future
 
 /**
@@ -35,11 +40,11 @@ object Hdfs {
     val bind = Option(sourceConfig.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     val source = Source.fromGraph(new HdfsSource(
-      path = new Path(sourceConfig.path),
+      path = sourceConfig.path,
       offset = sourceConfig.offset,
       len = sourceConfig.len,
       bufferSize = sourceConfig.bufferSize,
-      _create = () ⇒ center.context.register(addressKey, bind, () ⇒ address(addressKey)).client,
+      _create = () ⇒ center.context.register(addressKey, bind, () ⇒ addressByUser(addressKey, sourceConfig.user)).client,
       _close = {
         _ ⇒
           center.context.unRegister(addressKey, bind)
@@ -50,28 +55,53 @@ object Hdfs {
       .getOrElse(source).map { bs ⇒
       offset += (bs.length + delimiterLength)
       SourceMessage(offset, bs)
-    }
-      .via(Metrics.count[SourceMessage[Long, ByteString]](sourceKey)(center.metricsRegistry))
+    }.via(Metrics.count[SourceMessage[Long, ByteString]](sourceKey)(center.metricsRegistry))
   }
 
-  def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[ByteString], Message[ByteString], NotUsed] = {
+  def flow(sinkKey: String)(implicit center: TeleporterCenter): Flow[Message[HdfsByteString], Message[HdfsByteString], NotUsed] = {
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
     val sinkConfig = sinkContext.config.mapTo[HdfsSinkMetaBean]
     val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
-    Flow.fromGraph(new HdfsSink(
-      path = new Path(sinkConfig.path),
+    val hdfsFlow = Flow.fromGraph(new HdfsSink(
+      path = sinkConfig.path,
       overwrite = sinkConfig.overwrite,
       _create = () ⇒ {
-        center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
+        center.context.register(addressKey, bind, () ⇒ addressByUser(addressKey, sinkConfig.user)).client
       },
       _close = {
         _ ⇒ center.context.unRegister(addressKey, bind)
       })).addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sinkKey, sinkContext.config)))
-      .via(Metrics.count[Message[ByteString]](sinkKey)(center.metricsRegistry))
+      .via(Metrics.count[Message[HdfsByteString]](sinkKey)(center.metricsRegistry))
+    SinkRollerSetting(sinkConfig) match {
+      case Some(setting) ⇒
+        if (setting.cron.isDefined || setting.size.isDefined) {
+          val rollerFlow = SinkRoller.flow[Message[HdfsByteString], Message[HdfsByteString]](
+            setting = setting,
+            cronRef = center.crontab,
+            catchSize = _.data.byteString.length,
+            catchField = _.data.path.getOrElse(sinkConfig.path.get),
+            rollKeep = (in, path) ⇒ in.map(data ⇒ data.copy(path = Some(path))),
+            rollDo = path ⇒ Message(HdfsByteString(ByteString.empty, Some(path), total = 0))
+          )
+          rollerFlow.via(hdfsFlow)
+        } else {
+          hdfsFlow
+        }
+      case None ⇒ hdfsFlow
+    }
   }
 
-  def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[ByteString], Future[Done]] = {
+  def addressByUser(addressKey: String, user: Option[String])(implicit center: TeleporterCenter): AutoCloseClientRef[FileSystem] = {
+    user match {
+      case Some(u) ⇒ UserGroupInformation.createRemoteUser(u).doAs(new PrivilegedExceptionAction[AutoCloseClientRef[FileSystem]] {
+        override def run(): AutoCloseClientRef[FileSystem] = address(addressKey)
+      })
+      case None ⇒ address(addressKey)
+    }
+  }
+
+  def sink(sinkKey: String)(implicit center: TeleporterCenter): Sink[Message[HdfsByteString], Future[Done]] = {
     flow(sinkKey).toMat(Sink.ignore)(Keep.right)
   }
 
@@ -97,6 +127,7 @@ object HdfsSourceMetaBean {
   val FLen = "len"
   val FBufferSize = "bufferSize"
   val FDelimiter = "delimiter"
+  val FUser = "user"
 }
 
 class HdfsSourceMetaBean(override val underlying: JdbcMessage) extends SourceMetaBean(underlying) {
@@ -115,10 +146,13 @@ class HdfsSourceMetaBean(override val underlying: JdbcMessage) extends SourceMet
   def bufferSize: Int = client.get[Int](FBufferSize).getOrElse(4096)
 
   def delimiter: Option[ByteString] = client.get[String](FDelimiter).map(Base64.getDecoder.decode(_)).map(ByteString(_))
+
+  def user: Option[String] = client.get[String](FUser)
 }
 
 object HdfsSinkMetaBean {
   val FPath = "path"
+  val FUser = "user"
   val FOverwrite = "overwrite"
 }
 
@@ -126,12 +160,14 @@ class HdfsSinkMetaBean(override val underlying: JdbcMessage) extends SinkMetaBea
 
   import HdfsSinkMetaBean._
 
-  def path: String = client[String](FPath)
+  def path: Option[String] = client.get[String](FPath)
+
+  def user: Option[String] = client.get[String](FUser)
 
   def overwrite: Boolean = client.get[Boolean](FOverwrite).getOrElse(true)
 }
 
-class HdfsSource(path: Path,
+class HdfsSource(path: String,
                  offset: Long, len: Long = Long.MaxValue, bufferSize: Int,
                  _create: () ⇒ FileSystem,
                  _close: FileSystem ⇒ Unit)
@@ -145,7 +181,7 @@ class HdfsSource(path: Path,
 
   override def create(): FileSystem = {
     val fs = _create()
-    inputStream = fs.open(path)
+    inputStream = fs.open(new Path(path))
     inputStream.skip(offset)
     fs
   }
@@ -165,24 +201,41 @@ class HdfsSource(path: Path,
   }
 }
 
-class HdfsSink(path: Path, overwrite: Boolean, _create: () ⇒ FileSystem, _close: FileSystem ⇒ Unit)
-  extends CommonSink[FileSystem, Message[ByteString], Message[ByteString]]("HdfsWriter") {
+case class HdfsByteString(byteString: ByteString, path: Option[String] = None, end: Long = 0, total: Long = -1) {
+  def isEnd: Boolean = end == total
+}
+
+class HdfsSink(
+                path: Option[String],
+                overwrite: Boolean,
+                _create: () ⇒ FileSystem,
+                _close: FileSystem ⇒ Unit)
+  extends CommonSink[FileSystem, Message[HdfsByteString], Message[HdfsByteString]]("HdfsWriter") with Logging {
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.CacheDispatcher
-  var outputStream: OutputStream = _
+  val outputStreams: mutable.HashMap[String, OutputStream] = mutable.HashMap[String, OutputStream]()
 
-  override def create(): FileSystem = {
-    val fs = _create()
-    outputStream = fs.create(path, overwrite)
-    fs
-  }
+  override def create(): FileSystem = _create()
 
-  override def write(client: FileSystem, elem: Message[ByteString]): Message[ByteString] = {
-    outputStream.write(elem.data.toArray)
+  override def write(client: FileSystem, elem: Message[HdfsByteString]): Message[HdfsByteString] = {
+    val hdfsByteString = elem.data
+    val currPath = hdfsByteString.path.getOrElse(path.get)
+    outputStreams.getOrElseUpdate(currPath, client.create(new Path(currPath), overwrite))
+      .write(hdfsByteString.byteString.toArray)
+    if (hdfsByteString.isEnd) closeStream(currPath)
     elem
   }
 
+  private def closeStream(path: String): Unit = {
+    try {
+      outputStreams.remove(path).foreach(_.close())
+    } catch {
+      case e: Throwable ⇒ logger.info(e.getMessage, e)
+    }
+  }
+
   override def close(client: FileSystem): Unit = {
-    if (outputStream != null) outputStream.close()
+    outputStreams.keys.foreach(closeStream)
+    outputStreams.clear()
     _close(client)
   }
 }
@@ -190,7 +243,6 @@ class HdfsSink(path: Path, overwrite: Boolean, _create: () ⇒ FileSystem, _clos
 object HdfsMetaBean {
   val FHosts = "hosts"
   val FUri = "uri"
-  val FUser = "user"
   val FCoreSite = "core-site.xml"
   val FHdfsSite = "hdfs-site.xml"
   val FSSLClient = "ssl-client.xml"
@@ -203,8 +255,6 @@ class HdfsMetaBean(override val underlying: Map[String, Any]) extends AddressMet
   def hosts: Option[String] = client.get[String](FHosts)
 
   def uri: String = client[String](FUri)
-
-  def user: Option[String] = client.get[String](FUser)
 
   def coreSite: Option[String] = client.get[String](FCoreSite)
 

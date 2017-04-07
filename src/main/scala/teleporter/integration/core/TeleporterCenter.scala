@@ -6,19 +6,18 @@ import akka.Done
 import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.dispatch.ExecutionContexts
 import akka.pattern._
-import akka.stream.{ActorMaterializer, Materializer}
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Materializer, Supervision}
 import akka.util.Timeout
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import com.markatta.akron.CronTab
 import com.typesafe.config.{Config, ConfigFactory}
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.ActorTestMessages.Ping
 import teleporter.integration.cluster.instance.Brokers
 import teleporter.integration.cluster.rpc.{EventBody, TeleporterEvent}
-import teleporter.integration.component.GitClient
 import teleporter.integration.component.kv.KVOperator
 import teleporter.integration.component.kv.leveldb.{LevelDBs, LevelTable}
 import teleporter.integration.component.kv.rocksdb.{RocksDBs, RocksTable}
+import teleporter.integration.component.{Cron, GitClient}
 import teleporter.integration.concurrent.SizeScaleThreadPoolExecutor
 import teleporter.integration.core.TeleporterConfigActor.LoadAddress
 import teleporter.integration.metrics.{InfluxdbReporter, MetricRegistry}
@@ -74,7 +73,7 @@ trait TeleporterCenter extends Logging {
 
 class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config: Config, kVOperator: KVOperator)
                           (implicit val system: ActorSystem, val materializer: Materializer) extends TeleporterCenter {
-  implicit val timeout: Timeout = 1.minute
+  implicit val timeout: Timeout = 10.seconds
   var _context: TeleporterContext = _
   var _brokers: ActorRef = _
   var _streams: ActorRef = _
@@ -84,6 +83,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
   val _eventListener: EventListener[TeleporterEvent[_ <: EventBody]] = EventListener[TeleporterEvent[_ <: EventBody]]()
   val _teleporterConfigClient = TeleporterConfigClient()
   var _localStatusRef: ActorRef = _
+  var _crontab: ActorRef = _
 
   override def start(): Future[Done] = {
     _context = TeleporterContext()
@@ -94,6 +94,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
     _localStatusRef = system.actorOf(Props(classOf[LocalStatusActor], config.getString("status-file"), this))
     val (brokerRef, connected) = Brokers(seedBrokers)
     _brokers = brokerRef
+    _crontab = Cron.cronRef("teleporter_crontab")
     connected.map {
       done ⇒
         val metricsConfig = config.getConfig("metrics")
@@ -132,13 +133,16 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
 
   override def gitClient: GitClient = null
 
-  override def crontab: ActorRef = system.actorOf(CronTab.props, "teleporter_crontab")
+  override def crontab: ActorRef = _crontab
 }
 
 object TeleporterCenter extends Logging {
   def apply(config: Config = ConfigFactory.load("instance")): TeleporterCenter = {
     implicit val system = ActorSystem("instance", config)
-    implicit val mater = ActorMaterializer()
+    val decider: Supervision.Decider = {
+      case e: Exception ⇒ logger.warn(e.getMessage, e); Supervision.Stop
+    }
+    implicit val materializer = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
 
     val instanceConfig = config.getConfig("teleporter")
     val (instanceKey, seedBrokers) = (instanceConfig.getString("key"), instanceConfig.getString("brokers"))

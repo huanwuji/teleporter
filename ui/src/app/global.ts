@@ -1,6 +1,7 @@
 import {Headers, RequestOptions} from "@angular/http";
 export class Global {
-  static server: String = "";
+  static server: String = "http://localhost:9021";
+  // static server: String = "";
 
   static handleError(error: any) {
     console.error('An error occurred', error);

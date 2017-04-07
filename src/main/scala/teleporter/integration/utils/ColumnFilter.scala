@@ -11,19 +11,7 @@ trait Hashing {
   val defaultHashByteArray: Array[Byte] = Bytes.toBytes(defaultHashCode)
 
   def hashValue(value: Any): Int = {
-    val bytes = value match {
-      case value: Boolean ⇒ Bytes.toBytes(value)
-      case value: Char ⇒ Bytes.toBytes(value)
-      case value: Short ⇒ Bytes.toBytes(value)
-      case value: Int ⇒ Bytes.toBytes(value)
-      case value: Long ⇒ Bytes.toBytes(value)
-      case value: Float ⇒ Bytes.toBytes(value)
-      case value: Double ⇒ Bytes.toBytes(value)
-      case value: BigDecimal ⇒ Bytes.toBytes(value)
-      case value: String ⇒ Bytes.toBytes(value)
-      case null ⇒ defaultHashByteArray
-      case x ⇒ Bytes.toBytes(String.valueOf(x))
-    }
+    val bytes = Option(value).map(Bytes.to).getOrElse(defaultHashByteArray)
     MurmurHash3.bytesHash(bytes)
   }
 

@@ -1,8 +1,12 @@
 package teleporter.integration.cluster.broker
 
+import java.util.Properties
+
 import com.typesafe.config.Config
+import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import org.mongodb.scala.MongoClient
 import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys}
+import teleporter.integration.cluster.broker.jdbc.JDBCService
 import teleporter.integration.cluster.broker.leveldb.LevelDBService
 import teleporter.integration.cluster.broker.mongo.MongoDBService
 import teleporter.integration.cluster.broker.rocksdb.RocksDBService
@@ -11,6 +15,7 @@ import teleporter.integration.component.kv.rocksdb.RocksDBs
 import teleporter.integration.utils.Converters._
 import teleporter.integration.utils.{Jackson, MapBean, MapMetaBean}
 
+import scala.collection.JavaConverters._
 import scala.concurrent.ExecutionContext
 import scala.reflect.ClassTag
 import scala.util.matching.Regex
@@ -245,6 +250,12 @@ object PersistentService {
         val mongoClient = MongoClient(mongoConfig.getString("uri"))
         val database = mongoClient.getDatabase(mongoConfig.getString("database"))
         (MongoDBService(database.getCollection("config")), MongoDBService(database.getCollection("runtime")))
+      case "jdbc" ⇒
+        val properties = new Properties()
+        storageConfig.getConfig("jdbc").entrySet().asScala.foreach(c ⇒ properties.put(c.getKey, c.getValue.unwrapped()))
+        val hikariConfig = new HikariConfig(properties)
+        implicit val dataSource = new HikariDataSource(hikariConfig)
+        (JDBCService("teleporter_config"), JDBCService("teleporter_runtime"))
     }
   }
 }

@@ -29,7 +29,7 @@ export class PartitionListComponent implements OnInit {
   }
 
   list() {
-    this.partitionService.range(`/partition/${this.ns}/${this.task}`)
+    this.partitionService.range(`/partition/${this.ns}/${this.task}/`)
       .then(kbs => this.kbs = kbs);
   }
 

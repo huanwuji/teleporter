@@ -23,12 +23,12 @@ import scala.util.control.NonFatal
 object FileTailer {
   val Read: util.Set[StandardOpenOption] = java.util.Collections.singleton(java.nio.file.StandardOpenOption.READ)
 
-  def source(path: Path, end: Boolean = true): Source[ByteString, NotUsed] = {
-    Source.fromGraph(new FileTailer(path, end))
+  def source(path: Path, offset: Long = 0, end: Boolean = true): Source[ByteString, NotUsed] = {
+    Source.fromGraph(new FileTailer(path, offset, end))
   }
 }
 
-class FileTailer(path: Path, end: Boolean, bufferSize: Int = 4096) extends CommonSource[FileChannel, ByteString]("file.tailer") with Logging {
+class FileTailer(path: Path, offset: Long, end: Boolean, bufferSize: Int = 4096) extends CommonSource[FileChannel, ByteString]("file.tailer") with Logging {
 
   override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.IODispatcher
 
@@ -42,7 +42,9 @@ class FileTailer(path: Path, end: Boolean, bufferSize: Int = 4096) extends Commo
     inbuf.clear()
     chan = FileChannel.open(path, FileTailer.Read)
     last = System.currentTimeMillis
-    position = if (end) chan.size else 0
+    position = if (offset > 0) chan.size - offset else {
+      if (end) chan.size else 0
+    }
     chan.position(position)
     chan
   }

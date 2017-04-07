@@ -2,12 +2,13 @@ package teleporter.integration.component
 
 import java.util.Properties
 
-import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
-import akka.stream.{ActorAttributes, Attributes, TeleporterAttributes}
+import akka.stream._
+import akka.stream.scaladsl.{Flow, GraphDSL, Keep, Merge, Sink, Source}
 import akka.{Done, NotUsed}
 import kafka.common.TopicAndPartition
-import kafka.consumer.ConsumerConfig
+import kafka.consumer.{ConsumerConfig, ConsumerIterator, KafkaStream}
 import kafka.javaapi.consumer.ZkKafkaConsumerConnector
+import kafka.message.MessageAndMetadata
 import org.apache.kafka.clients.producer._
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics
@@ -40,13 +41,13 @@ object Kafka {
                (implicit center: TeleporterCenter): Source[AckMessage[KafkaLocation, KafkaMessage], NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
     val kafkaSourceConfig = sourceContext.config.mapTo[KafkaSourceMetaBean]
-    val bind = Option(sourceContext.config.addressBind).getOrElse(sourceKey)
+    val bind = Option(sourceContext.config.addressBind).getOrElse(sourceContext.stream().key)
     val addressKey = sourceContext.address().key
     val subscribeTopics = kafkaSourceConfig.topics.split(",").map(_.split(":"))
       .map { case Array(topic, threads) ⇒ (topic, Int.box(threads.toInt)) }.toMap
-    val client = center.context.register(addressKey, bind, () ⇒ consumer(addressKey)).client
+    val client = center.context.register(addressKey, bind, () ⇒ consumer(addressKey, subscribeTopics)).client
     val savePoint = KafkaSavePoint(client.zkKafkaConnector)
-    client.subscribe(subscribeTopics).map(m ⇒ SourceMessage(KafkaLocation(TopicPartition(m.topic, m.partition), m.offset), m))
+    client.getInstance().map(m ⇒ SourceMessage(KafkaLocation(TopicPartition(m.topic, m.partition), m.offset), m))
       .via(SourceAck.flow(
         id = sourceContext.id,
         config = SourceAckConfig(sourceContext.config),
@@ -60,11 +61,11 @@ object Kafka {
   def source(sourceKey: String)(implicit center: TeleporterCenter): Source[KafkaMessage, NotUsed] = {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
     val kafkaSourceConfig = sourceContext.config.mapTo[KafkaSourceMetaBean]
-    val bind = Option(sourceContext.config.addressBind).getOrElse(sourceKey)
+    val bind = Option(sourceContext.config.addressBind).getOrElse(sourceContext.stream().key)
     val addressKey = sourceContext.address().key
     val subscribeTopics = kafkaSourceConfig.topics.split(",").map(_.split(":"))
       .map { case Array(topic, threads) ⇒ (topic, Int.box(threads.toInt)) }.toMap
-    center.context.register(addressKey, bind, () ⇒ consumer(addressKey)).client.subscribe(subscribeTopics)
+    center.context.register(addressKey, bind, () ⇒ consumer(addressKey, subscribeTopics)).client.getInstance()
       .addAttributes(Attributes(TeleporterAttributes.SupervisionStrategy(sourceKey, sourceContext.config)))
       .via(Metrics.count[KafkaMessage](sourceKey)(center.metricsRegistry))
   }
@@ -100,7 +101,7 @@ object Kafka {
     AutoCloseClientRef(key, new KafkaProducer[Array[Byte], Array[Byte]](props))
   }
 
-  def consumer(key: String)(implicit center: TeleporterCenter): CloseClientRef[KafkaConsumer] = {
+  def consumer(key: String, topics: Map[String, Integer])(implicit center: TeleporterCenter): CloseClientRef[KafkaConsumer] = {
     implicit val config = center.context.getContext[AddressContext](key).config
     val props = new Properties()
     config.client.toMap.foreach {
@@ -110,19 +111,54 @@ object Kafka {
         }
     }
     val consumerConfig = new ConsumerConfig(props)
-    val consumer = new KafkaConsumer(new ZkKafkaConsumerConnector(consumerConfig))
+    val consumer = new KafkaConsumer(new ZkKafkaConsumerConnector(consumerConfig), topics)
     new AutoCloseClientRef[KafkaConsumer](key, consumer)
   }
 }
 
-class KafkaConsumer(val zkKafkaConnector: ZkKafkaConsumerConnector) extends AutoCloseable {
-  def subscribe(topics: Map[String, Integer]): Source[KafkaMessage, NotUsed] = {
-    val streams = zkKafkaConnector.createMessageStreams(topics.asJava).asScala
-      .values.flatMap(_.asScala)
-    Source(streams.toIndexedSeq)
-      .flatMapConcat(stream ⇒ Source.fromIterator(() ⇒ stream.iterator()))
-      .addAttributes(ActorAttributes.dispatcher(TeleporterAttributes.CacheDispatcher.dispatcher))
+class KafkaSource(threadName: String, kafkaStream: KafkaStream[Array[Byte], Array[Byte]])
+  extends CommonSource[NotUsed, KafkaMessage]("KafkaSource") {
+  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.CacheDispatcher
+
+  private var iterator: ConsumerIterator[Array[Byte], Array[Byte]] = _
+
+  override def create(): NotUsed = {
+    iterator = kafkaStream.iterator()
+    val thread = Thread.currentThread()
+    thread.setName(s"$threadName-${thread.getName}")
+    NotUsed
   }
+
+  override def readData(client: NotUsed): Option[KafkaMessage] = {
+    val message = Option(iterator.next())
+    message match {
+      case Some(_) ⇒ message
+      case None ⇒ readData(client)
+    }
+  }
+
+  override def close(client: NotUsed): Unit = {}
+}
+
+class KafkaConsumer(val zkKafkaConnector: ZkKafkaConsumerConnector, topics: Map[String, Integer]) extends AutoCloseable {
+  val streamSource: Source[MessageAndMetadata[Array[Byte], Array[Byte]], NotUsed] = {
+    Source.fromGraph(GraphDSL.create() { implicit b ⇒
+      import GraphDSL.Implicits._
+      val streamSources = zkKafkaConnector.createMessageStreams(topics.asJava).asScala
+        .flatMap { case (topic, streams) ⇒
+          streams.asScala.map { stream ⇒
+            Source.fromGraph(new KafkaSource(topic, stream))
+          }
+        }.toIndexedSeq
+      val merge = b.add(Merge[MessageAndMetadata[Array[Byte], Array[Byte]]](streamSources.size))
+      for (i ← streamSources.indices) {
+        streamSources(i) ~> merge.in(i)
+      }
+      SourceShape(merge.out)
+    })
+  }
+
+  def getInstance(): Source[KafkaMessage, NotUsed] = streamSource
 
   def commit(topicAndPartition: TopicAndPartition, offset: Long): Unit = {
     zkKafkaConnector.commitOffsets(topicAndPartition, offset)

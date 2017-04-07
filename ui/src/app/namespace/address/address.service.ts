@@ -64,6 +64,10 @@ export class AddressService extends ConfigService<Address> {
         return this.getKafkaProducerItems();
       case 'jdbc':
         return this.getJDBCItems();
+      case 'mysql':
+        return this.getJDBCItems();
+      case 'hive':
+        return this.getHiveItems();
       case 'mongo':
         return this.getMongoItems();
       case 'influxdb':
@@ -78,6 +82,8 @@ export class AddressService extends ConfigService<Address> {
         return this.getHDFSItems();
       case 'hbase':
         return this.getHBaseItems();
+      case 'kudu':
+        return this.getKuduItems();
       default:
         throw "Can't found this type"
     }
@@ -139,10 +145,19 @@ export class AddressService extends ConfigService<Address> {
 
   private getJDBCItems() {
     return [
-      new TextboxFormItem({key: 'jdbcUrl', label: 'jdbcUrl', value: 'jdbc:mysql://localhost:3306/database'}),
+      new TextboxFormItem({key: 'host', label: 'host', value: "localhost:10000"}),
       new TextboxFormItem({key: 'username', label: 'username'}),
       new TextboxFormItem({key: 'password', label: 'password'}),
       new TextboxFormItem({key: 'maximumPoolSize', label: 'maximumPoolSize', type: 'number', value: 1})
+    ];
+  }
+
+  private getHiveItems() {
+    return [
+      new TextboxFormItem({key: 'host', label: 'host', value: "localhost:10000"}),
+      new TextboxFormItem({key: 'database', label: 'database'}),
+      new TextboxFormItem({key: 'username', label: 'username'}),
+      new TextboxFormItem({key: 'password', label: 'password'}),
     ];
   }
 
@@ -160,7 +175,11 @@ export class AddressService extends ConfigService<Address> {
   private getElasticsearch5Items() {
     return [
       new TextboxFormItem({key: 'hosts', label: 'hosts', value: 'localhost:9300,localhost:9301'}),
-      new DynamicGroupFormItem({key: 'settings', label: 'settings'})
+      new DynamicGroupFormItem({
+        key: 'settings', label: 'settings', value: {
+          "cluster.name": "elasticsearch",
+        }
+      })
     ];
   }
 
@@ -190,8 +209,18 @@ export class AddressService extends ConfigService<Address> {
 
   private getHBaseItems() {
     return [
-      new TextboxFormItem({key: 'hbase-default', label: 'hbase-default.xml'}),
-      new TextboxFormItem({key: 'hbase-site', label: 'hbase-site.xml'})
+      new TextareaFormItem({key: 'hosts', label: 'hosts', placeholder: "properties"}),
+      new TextareaFormItem({key: 'core-site.xml', label: 'core-site.xml'}),
+      new TextareaFormItem({key: 'hdfs-site.xml', label: 'hdfs-site.xml'}),
+      new TextareaFormItem({key: 'ssl-client.xml', label: 'ssl-client.xml'}),
+      new TextareaFormItem({key: 'hbase-site.xml', label: 'hbase-site.xml'})
+    ];
+  }
+
+  private getKuduItems(): FormItemBase<any>[] {
+    return [
+      new TextboxFormItem({key: 'kuduMaster', label: 'kuduMaster', required: true,}),
+      new TextboxFormItem({key: 'workerCount', label: 'workerCount', type: 'number', required: true, value: 1})
     ];
   }
 

@@ -1,10 +1,10 @@
 import {Component, OnInit} from "@angular/core";
 import {ActivatedRoute, Router} from "@angular/router";
-import {AddressService, Address, RuntimeAddressService, RuntimeAddress} from "./address.service";
+import {Address, AddressService, RuntimeAddress, RuntimeAddressService} from "./address.service";
 import {KeyBean} from "../../rest.servcie";
 import {FormItemService} from "../../dynamic/form/form-item.service";
 import {FormItemBase} from "../../dynamic/form/form-item";
-import {FormGroup, FormControl} from "@angular/forms";
+import {FormControl, FormGroup} from "@angular/forms";
 
 @Component({
   selector: 'address-list',
@@ -56,7 +56,7 @@ export class AddressListComponent implements OnInit {
 })
 export class AddressDetailComponent implements OnInit {
   private formItems: FormItemBase<any>[];
-  private formGroup: FormGroup = new FormGroup({"": new FormControl()});
+  private formGroup: FormGroup = new FormGroup({"category": new FormControl("kafka")});
   private payLoad: string;
   private ns: string;
   private key: string;

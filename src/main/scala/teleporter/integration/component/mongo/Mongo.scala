@@ -4,7 +4,7 @@ import akka.stream.scaladsl.Source
 import akka.stream.{Attributes, TeleporterAttributes}
 import akka.{Done, NotUsed}
 import org.mongodb.scala.{Document, MongoClient, MongoCollection}
-import teleporter.integration.component.Roller.RollerContext
+import teleporter.integration.component.SourceRoller.RollerContext
 import teleporter.integration.component._
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics

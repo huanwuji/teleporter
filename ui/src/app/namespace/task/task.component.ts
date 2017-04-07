@@ -25,7 +25,7 @@ export class TaskListComponent implements OnInit {
   }
 
   list() {
-    this.taskService.range(`/task/${this.ns}`)
+    this.taskService.range(`/task/${this.ns}/`)
       .then((kbs: KeyBean<Task>[]) => this.kbs = kbs);
   }
 

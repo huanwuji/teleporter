@@ -13,24 +13,37 @@ trait Conversions {
   private val NULL: String = "null"
 
   def asInt(v: Any): Option[Int] = v match {
+    case null ⇒ None
+    case i: Int ⇒ Some(i)
     case NULL ⇒ None
     case s: String if s.isEmpty ⇒ None
     case s: String ⇒ Some(s.toInt)
-    case i: Int ⇒ Some(i)
     case d: Double => Some(d.toInt)
     case bi: BigInt ⇒ Some(bi.toInt)
     case _ ⇒ throw new IllegalArgumentException(s"No match int type convert for type:${v.getClass}, value:$v")
   }
 
-  def asLong(v: Any): Option[Long] = v match {
+  def asShort(v: Any): Option[Short] = v match {
+    case null ⇒ None
+    case s: Short ⇒ Some(s)
+    case NULL ⇒ None
     case s: String if s.isEmpty ⇒ None
+    case s: String ⇒ Some(s.toShort)
+    case i: Int ⇒ Some(i.toShort)
+    case d: Double => Some(d.toShort)
+    case bi: BigInt ⇒ Some(bi.toShort)
+    case _ ⇒ throw new IllegalArgumentException(s"No match int type convert for type:${v.getClass}, value:$v")
+  }
+
+  def asLong(v: Any): Option[Long] = v match {
+    case null ⇒ None
+    case l: Long ⇒ Some(l)
     case NULL ⇒ None
     case s: String if s.isEmpty ⇒ None
     case s: String ⇒ Some(s.toLong)
     case bi: BigInt ⇒ Some(bi.toLong)
     case i: Int ⇒ Some(i.toLong)
     case d: Double => Some(d.toLong)
-    case l: Long ⇒ Some(l)
     case _ ⇒ throw new IllegalArgumentException(s"No match long type convert for type:${v.getClass}, value:$v")
   }
 
@@ -40,32 +53,40 @@ trait Conversions {
   }
 
   def asNonEmptyString(v: Any): Option[String] = v match {
+    case null ⇒ None
     case s: String if s.isEmpty ⇒ None
     case x ⇒ Option(x.toString)
   }
 
   def asDuration(v: Any): Option[Duration] = v match {
+    case null ⇒ None
+    case d: Duration ⇒ Some(d)
     case s: String if s.isEmpty ⇒ None
     case s: String ⇒ Some(Duration(s))
     case _ ⇒ throw new IllegalArgumentException(s"No match duration type convert for type:${v.getClass}, value:$v")
   }
 
   def asBoolean(v: Any): Option[Boolean] = v match {
-    case s: String if s.isEmpty ⇒ None
-    case NULL ⇒ None
-    case s: String ⇒ Some(s.toBoolean)
+    case null ⇒ None
     case b: Boolean ⇒ Some(b)
+    case NULL ⇒ None
+    case s: String if s.isEmpty ⇒ None
+    case s: String ⇒ Some(s.toBoolean)
     case jb: java.lang.Boolean ⇒ Some(jb)
     case _ ⇒ throw new IllegalArgumentException(s"No match boolean type convert for type:${v.getClass}, value:$v")
   }
 
   def asDouble(v: Any): Option[Double] = v match {
+    case null ⇒ None
+    case d: Double ⇒ Some(d)
     case s: String if s.isEmpty ⇒ None
     case s: String ⇒ Some(s.toDouble)
     case _ ⇒ throw new IllegalArgumentException(s"No match double type convert for type:${v.getClass}, value:$v")
   }
 
   def asFloat(v: Any): Option[Float] = v match {
+    case null ⇒ None
+    case f: Float ⇒ Some(f)
     case NULL ⇒ None
     case s: String if s.isEmpty ⇒ None
     case s: String ⇒ Some(s.toFloat)
@@ -73,7 +94,17 @@ trait Conversions {
     case _ ⇒ throw new IllegalArgumentException(s"No match float type convert for type:${v.getClass}, value:$v")
   }
 
+
+  def asBytes(v: Any): Option[Array[Byte]] = v match {
+    case null ⇒ None
+    case NULL ⇒ None
+    case bytes: Array[Byte] ⇒ Some(bytes)
+    case s ⇒ Some(Bytes.to(s))
+  }
+
   def asSqlDate(v: Any): Option[java.sql.Date] = v match {
+    case null ⇒ None
+    case d: java.sql.Date ⇒ Some(d)
     case d: java.util.Date ⇒ Some(new java.sql.Date(d.getTime))
     case NULL ⇒ None
     case s: String if s.isEmpty ⇒ None
@@ -82,6 +113,8 @@ trait Conversions {
   }
 
   def asTimestamp(v: Any): Option[Timestamp] = v match {
+    case null ⇒ None
+    case t: Timestamp ⇒ Some(t)
     case d: java.util.Date ⇒ Some(new Timestamp(d.getTime))
     case NULL ⇒ None
     case s: String if s.isEmpty ⇒ None
@@ -90,6 +123,7 @@ trait Conversions {
   }
 
   def asDate(v: Any): Option[LocalDateTime] = v match {
+    case null ⇒ None
     case d: java.time.LocalDateTime ⇒ Some(d)
     case NULL ⇒ None
     case s: String if s.isEmpty ⇒ None

@@ -6,6 +6,7 @@ import kafka.message.MessageAndMetadata
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.elasticsearch.action.ActionRequest
 import org.mongodb.scala.Document
+import teleporter.integration.component.hbase.{HbaseAction, HbaseOut}
 import teleporter.integration.component.jdbc.Action
 import teleporter.integration.component.kudu.KuduAction
 
@@ -22,4 +23,6 @@ package object component {
   type ElasticRecord = ActionRequest[_ <: AnyRef]
   type MongoMessage = Document
   type KuduRecord = KuduAction
+  type HbaseRecord = HbaseAction
+  type HbaseResult = HbaseOut
 }

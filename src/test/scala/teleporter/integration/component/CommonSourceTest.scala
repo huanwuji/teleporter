@@ -7,7 +7,7 @@ import akka.Done
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{Sink, Source}
 import akka.stream.{ActorMaterializer, Attributes, TeleporterAttributes}
-import teleporter.integration.component.Roller._
+import teleporter.integration.component.SourceRoller._
 import teleporter.integration.component.jdbc.SqlSupport
 import teleporter.integration.supervision.DecideRule
 
@@ -133,7 +133,7 @@ object CommonSourceTest extends App {
           deadline = () ⇒ now
         )),
       forever = false,
-      state = Roller.Paging
+      state = SourceRoller.Paging
     )
     Source.fromGraph(new TestCommonRollerSource(rollerContext.nextTimeline().copy(state = Paging)))
       .addAttributes(Attributes(TeleporterAttributes
@@ -157,9 +157,9 @@ object CommonSourceTest extends App {
           deadline = () ⇒ LocalDateTime.now()
         )),
       forever = true,
-      state = Roller.Timing
+      state = SourceRoller.Timing
     )
-    Source.fromGraph(new TestRollerSourceAsync(rollerContext.nextTimeline().copy(state = Roller.Timing)))
+    Source.fromGraph(new TestRollerSourceAsync(rollerContext.nextTimeline().copy(state = SourceRoller.Timing)))
       .addAttributes(Attributes(TeleporterAttributes
         .SupervisionStrategy(Seq(DecideRule(".*", "INFO", "reload(delay=5000.millis, retries=5, next=stop)")))))
       .to(Sink.foreach(println)).run()

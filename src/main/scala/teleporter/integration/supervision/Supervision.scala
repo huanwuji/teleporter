@@ -111,9 +111,9 @@ class StreamDecider(key: String, streamRef: ActorRef, val supervisionStrategy: S
       retries = 0
     }
     retries += 1
-    matchRule(ex).foreach {
-      rule ⇒
-        if (retries < rule.directive.retries) {
+    matchRule(ex) match {
+      case Some(rule) ⇒
+        if (rule.directive.retries == -1 || retries < rule.directive.retries) {
           rule.directive.delay match {
             case Duration.Zero ⇒ decide(ex, rule.directive)
             case d: FiniteDuration ⇒
@@ -127,6 +127,7 @@ class StreamDecider(key: String, streamRef: ActorRef, val supervisionStrategy: S
         } else {
           rule.directive.next.foreach(decide(ex, _))
         }
+      case None ⇒ stop(ex)
     }
   }
 

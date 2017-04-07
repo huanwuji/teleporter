@@ -1,6 +1,9 @@
 package teleporter.integration.utils
 
 import com.google.common.base.Charsets
+import org.apache.commons.io.FileUtils
+
+import scala.util.matching.Regex
 
 /**
   * Author: kui.dai
@@ -25,6 +28,20 @@ trait Bytes {
 
   implicit def toBytes(value: String): Array[Byte] = value.getBytes(Charsets.UTF_8)
 
+  implicit def to(value: Any): Array[Byte] =
+    value match {
+      case value: Boolean ⇒ Bytes.toBytes(value)
+      case value: Char ⇒ Bytes.toBytes(value)
+      case value: Short ⇒ Bytes.toBytes(value)
+      case value: Int ⇒ Bytes.toBytes(value)
+      case value: Long ⇒ Bytes.toBytes(value)
+      case value: Float ⇒ Bytes.toBytes(value)
+      case value: Double ⇒ Bytes.toBytes(value)
+      case value: BigDecimal ⇒ Bytes.toBytes(value)
+      case value: String ⇒ Bytes.toBytes(value)
+      case x ⇒ Bytes.toBytes(String.valueOf(x))
+    }
+
   implicit def toBoolean(b: Array[Byte]): Boolean = b(0) != 0
 
   implicit def toChar(b: Array[Byte]): Char = ((b(0) << 8) | (b(1) & 0xFF)).toChar
@@ -42,4 +59,26 @@ trait Bytes {
   implicit def toStr(b: Array[Byte]): String = new String(b, Charsets.UTF_8)
 }
 
-object Bytes extends Bytes
+object Bytes extends Bytes {
+  val BYTE_COUNT_FORMATTER: Regex = "([\\d.]+)\\s*(\\w+)?".r
+
+  def displaySizeToByteCount(displaySize: String): Long = {
+    displaySize match {
+      case BYTE_COUNT_FORMATTER(scale, unit) ⇒
+        if (unit == null) scale.toLong
+        else displaySizeToByteCount(scale.toDouble, unit.toUpperCase)
+    }
+  }
+
+  def displaySizeToByteCount(scale: Double, unit: String): Long = {
+    unit match {
+      case "KB" ⇒ (scale * FileUtils.ONE_KB).toLong
+      case "MB" ⇒ (scale * FileUtils.ONE_MB).toLong
+      case "GB" ⇒ (scale * FileUtils.ONE_GB).toLong
+      case "TB" ⇒ (scale * FileUtils.ONE_TB).toLong
+      case "PB" ⇒ (scale * FileUtils.ONE_PB).toLong
+      case "EB" ⇒ (scale * FileUtils.ONE_EB).toLong
+      case _ ⇒ throw new IllegalArgumentException(s"UnSupport unit $unit");
+    }
+  }
+}

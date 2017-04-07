@@ -108,12 +108,16 @@ class MetricsTimer extends Metrics[Time] {
     }
   }
 
-  def dump(): Time = {
-    val (_min, _max, _totalSpend) = (min, max, totalSpend)
+  private def reset(): Unit = {
     min = 0L
     max = 0L
     totalSpend = 0L
-    Time(count.getAndSet(0L), _totalSpend, _min, _max)
+  }
+
+  def dump(): Time = {
+    val time = Time(count.getAndSet(0L), min, max, totalSpend)
+    reset()
+    time
   }
 }
 
