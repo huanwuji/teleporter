@@ -13,7 +13,8 @@ import com.typesafe.config.{Config, ConfigFactory}
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.ActorTestMessages.Ping
 import teleporter.integration.cluster.instance.Brokers
-import teleporter.integration.cluster.rpc.{EventBody, TeleporterEvent}
+import teleporter.integration.cluster.instance.Brokers.BrokerConnection
+import teleporter.integration.cluster.rpc.fbs
 import teleporter.integration.component.kv.KVOperator
 import teleporter.integration.component.kv.leveldb.{LevelDBs, LevelTable}
 import teleporter.integration.component.kv.rocksdb.{RocksDBs, RocksTable}
@@ -24,7 +25,7 @@ import teleporter.integration.metrics.{InfluxdbReporter, MetricRegistry}
 import teleporter.integration.utils.{EventListener, MapBean}
 
 import scala.concurrent.duration.{Duration, FiniteDuration, _}
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, Future, Promise}
 
 
 /**
@@ -44,6 +45,8 @@ trait TeleporterCenter extends Logging {
 
   val instanceKey: String
 
+  var brokerConnection: Promise[BrokerConnection] = Promise[BrokerConnection]()
+
   def context: TeleporterContext
 
   def brokers: ActorRef
@@ -54,7 +57,7 @@ trait TeleporterCenter extends Logging {
 
   def defaultSourceSavePoint: SavePoint[MapBean]
 
-  def eventListener: EventListener[TeleporterEvent[_ <: EventBody]]
+  def eventListener: EventListener[fbs.RpcMessage]
 
   def client: TeleporterConfigClient
 
@@ -80,7 +83,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
   var _configRef: ActorRef = _
   var _defaultRecoveryPoint: SavePoint[MapBean] = _
   var _metricRegistry: MetricRegistry = _
-  val _eventListener: EventListener[TeleporterEvent[_ <: EventBody]] = EventListener[TeleporterEvent[_ <: EventBody]]()
+  val _eventListener: EventListener[fbs.RpcMessage] = EventListener[fbs.RpcMessage]()
   val _teleporterConfigClient = TeleporterConfigClient()
   var _localStatusRef: ActorRef = _
   var _crontab: ActorRef = _
@@ -92,24 +95,22 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
     _defaultRecoveryPoint = SavePoint.sourceSavePoint()
     _metricRegistry = MetricRegistry()
     _localStatusRef = system.actorOf(Props(classOf[LocalStatusActor], config.getString("status-file"), this))
-    val (brokerRef, connected) = Brokers(seedBrokers)
-    _brokers = brokerRef
+    _brokers = Brokers(seedBrokers)
     _crontab = Cron.cronRef("teleporter_crontab")
-    connected.map {
-      done ⇒
-        val metricsConfig = config.getConfig("metrics")
-        val (open, key, duration) = (metricsConfig.getBoolean("open"), metricsConfig.getString("key"), metricsConfig.getString("duration"))
-        if (open) {
-          //load address
-          (this.configRef ? LoadAddress(key))
-            .flatMap(_ ⇒ this.context.ref ? Ping /*ensure context is add to center.context*/)
-            .foreach {
-              _ ⇒
-                logger.info(s"Metrics will open, key: $key, refresh: $duration")
-                this.openMetrics(key, Duration(duration).asInstanceOf[FiniteDuration])
-            }
-        }
-        done
+    brokerConnection.future.map { case _ ⇒
+      val metricsConfig = config.getConfig("metrics")
+      val (open, key, duration) = (metricsConfig.getBoolean("open"), metricsConfig.getString("key"), metricsConfig.getString("duration"))
+      if (open) {
+        //load address
+        (this.configRef ? LoadAddress(key))
+          .flatMap(_ ⇒ this.context.ref ? Ping /*ensure context is add to center.context*/)
+          .foreach {
+            _ ⇒
+              logger.info(s"Metrics will open, key: $key, refresh: $duration")
+              this.openMetrics(key, Duration(duration).asInstanceOf[FiniteDuration])
+          }
+      }
+      Done
     }
   }
 
@@ -125,7 +126,7 @@ class TeleporterCenterImpl(val instanceKey: String, seedBrokers: String, config:
 
   override def defaultSourceSavePoint: SavePoint[MapBean] = _defaultRecoveryPoint
 
-  override def eventListener: EventListener[TeleporterEvent[_ <: EventBody]] = _eventListener
+  override def eventListener: EventListener[fbs.RpcMessage] = _eventListener
 
   override def client: TeleporterConfigClient = _teleporterConfigClient
 

@@ -34,6 +34,7 @@ object Mongo {
     val bind = Option(sourceContext.config.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     Source.fromGraph(new MongoSourceAsync(
+      name = sourceKey,
       filter = mongoSourceConfig.filter,
       rollerContext = RollerContext(sourceContext.config),
       _create = (ec) ⇒ Future {
@@ -57,26 +58,16 @@ object Mongo {
   }
 }
 
-object MongoAddressMetaBean {
-  val FUrl = "url"
-}
-
 class MongoAddressMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import MongoAddressMetaBean._
+  val FUrl = "url"
 
   def url: String = client[String](FUrl)
 }
 
-object MongoSourceMetaBean {
+class MongoSourceMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
   val FDatabase = "database"
   val FCollection = "collection"
   val FFilter = "filter"
-}
-
-class MongoSourceMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
-
-  import MongoSourceMetaBean._
 
   def database: String = client[String](FDatabase)
 
@@ -85,11 +76,12 @@ class MongoSourceMetaBean(override val underlying: Map[String, Any]) extends Sou
   def filter: Option[String] = client.get[String](FFilter)
 }
 
-class MongoSourceAsync(filter: Option[String],
+class MongoSourceAsync(name: String = "mongo.source",
+                       filter: Option[String],
                        rollerContext: RollerContext,
                        _create: (ExecutionContext) ⇒ Future[MongoCollection[MongoMessage]],
                        _close: (MongoCollection[MongoMessage], ExecutionContext) ⇒ Future[Done])
-  extends RollerSourceAsync[SourceMessage[RollerContext, Seq[MongoMessage]], MongoCollection[MongoMessage]]("jdbc.source", rollerContext) {
+  extends RollerSourceAsync[SourceMessage[RollerContext, Seq[MongoMessage]], MongoCollection[MongoMessage]](name, rollerContext) {
 
   override def readData(client: MongoCollection[MongoMessage], rollerContext: RollerContext,
                         executionContext: ExecutionContext): Future[Option[SourceMessage[RollerContext, Seq[MongoMessage]]]] = {

@@ -1,16 +1,17 @@
 package teleporter.integration.cluster.broker
 
 import akka.actor.Actor
+import akka.stream.QueueOfferResult
 import teleporter.integration.cluster.broker.ConfigNotify.{Remove, Upsert}
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
 import teleporter.integration.cluster.broker.PersistentProtocol.Values.{GroupValue, PartitionValue, RuntimePartitionValue, TaskValue}
 import teleporter.integration.cluster.broker.PersistentProtocol.{Keys, Tables}
-import teleporter.integration.cluster.broker.tcp.ConnectionKeeper
 import teleporter.integration.cluster.rpc.EventBody.ConfigChangeNotify
-import teleporter.integration.cluster.rpc.TeleporterEvent
-import teleporter.integration.cluster.rpc.fbs.{Action, EventType}
+import teleporter.integration.cluster.rpc.fbs.{Action, MessageType}
+import teleporter.integration.cluster.rpc.{RpcRequest, RpcServerConnectionHandler}
 
 import scala.collection.concurrent.TrieMap
+import scala.concurrent.Future
 
 /**
   * @author kui.dai Created 2016/8/30
@@ -23,7 +24,7 @@ object ConfigNotify {
 
 }
 
-class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configService: PersistentService, runtimeService: PersistentService) extends Actor {
+class ConfigNotify(connectionKeepers: TrieMap[String, RpcServerConnectionHandler], configService: PersistentService, runtimeService: PersistentService) extends Actor {
   override def receive: Receive = {
     case Upsert(key) ⇒
       Keys.table(key) match {
@@ -55,7 +56,7 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
     configService.get(key).map(_.keyBean[TaskValue]).foreach { task ⇒
       configService.get(task.value.group).map(_.keyBean[GroupValue]).foreach { group ⇒
         group.value.instances.foreach { instanceKey ⇒
-          connectionKeepers.get(instanceKey).foreach(_.senderRef ! notifyEvent(key, action))
+          connectionKeepers.get(instanceKey).foreach(notifyEvent(_, key, action))
         }
       }
     }
@@ -64,14 +65,14 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
   def notifyGroup(key: String, action: Byte): Unit = {
     configService.get(key).map(_.keyBean[GroupValue]).foreach { group ⇒
       group.value.instances.foreach { instanceKey ⇒
-        connectionKeepers.get(instanceKey).foreach(_.senderRef ! notifyEvent(key, action))
+        connectionKeepers.get(instanceKey).foreach(notifyEvent(_, key, action))
       }
     }
   }
 
   def notifyPartition(key: String, action: Byte): Unit = {
     runtimeService.get(Keys.mapping(key, PARTITION, RUNTIME_PARTITION)).map(_.keyBean[RuntimePartitionValue]).foreach { runtimePartition ⇒
-      connectionKeepers.get(runtimePartition.value.instance).foreach(_.senderRef ! notifyEvent(key, action))
+      connectionKeepers.get(runtimePartition.value.instance).foreach(notifyEvent(_, key, action))
     }
   }
 
@@ -79,7 +80,7 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
     configService.range(Keys.mapping(key, STREAM, PARTITIONS)).map(_.keyBean[PartitionValue]).foreach { partition ⇒
       if (partition.value.keys.exists(Keys.belongRegex(_, key))) {
         runtimeService.get(partition.key).map(_.keyBean[RuntimePartitionValue]).foreach { runtimePartition ⇒
-          connectionKeepers.get(runtimePartition.value.instance).foreach(_.senderRef ! notifyEvent(notifyKey, action))
+          connectionKeepers.get(runtimePartition.value.instance).foreach(notifyEvent(_, notifyKey, action))
         }
       }
     }
@@ -96,18 +97,19 @@ class ConfigNotify(connectionKeepers: TrieMap[String, ConnectionKeeper], configS
   def notifyAddress(key: String, notifyKey: String, action: Byte): Unit = {
     runtimeService.range(Keys.mapping(key, ADDRESS, RUNTIME_ADDRESSES)).foreach { runtimeAddress ⇒
       connectionKeepers.get(Keys.mapping(runtimeAddress.key, RUNTIME_ADDRESS, INSTANCE))
-        .foreach(_.senderRef ! notifyEvent(notifyKey, action))
+        .foreach(notifyEvent(_, notifyKey, action))
     }
   }
 
   def notifyVariable(key: String, notifyKey: String, action: Byte): Unit = {
     runtimeService.range(Keys.mapping(key, VARIABLE, RUNTIME_VARIABLES)).foreach { runtimeVariable ⇒
       connectionKeepers.get(Keys.mapping(runtimeVariable.key, RUNTIME_VARIABLE, INSTANCE))
-        .foreach(_.senderRef ! notifyEvent(notifyKey, action))
+        .foreach(notifyEvent(_, notifyKey, action))
     }
   }
 
-  def notifyEvent(key: String, action: Byte): TeleporterEvent[ConfigChangeNotify] =
-    TeleporterEvent.request(eventType = EventType.ConfigChangeNotify,
-      body = ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()))
+  def notifyEvent(handler: RpcServerConnectionHandler, key: String, action: Byte): Future[QueueOfferResult] = {
+    handler.send(RpcRequest
+      .encodeByteString(0, MessageType.ConfigChangeNotify, ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()).toArray))
+  }
 }

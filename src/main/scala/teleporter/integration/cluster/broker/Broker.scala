@@ -4,8 +4,8 @@ import akka.actor.{ActorSystem, Props}
 import akka.stream.ActorMaterializer
 import com.typesafe.config.ConfigFactory
 import teleporter.integration.cluster.broker.http.HttpServer
-import teleporter.integration.cluster.broker.tcp.{ConnectionKeeper, RpcServer}
-import teleporter.integration.cluster.rpc.{EventBody, TeleporterEvent}
+import teleporter.integration.cluster.broker.tcp.RpcServer
+import teleporter.integration.cluster.rpc.{RpcServerConnectionHandler, fbs}
 import teleporter.integration.utils.EventListener
 
 import scala.collection.concurrent.TrieMap
@@ -21,11 +21,10 @@ object Broker {
     import system.dispatcher
     val brokerConfig = config.getConfig("teleporter")
     val (configService, runtimeService) = PersistentService(brokerConfig)
-    val connectionKeepers = TrieMap[String, ConnectionKeeper]()
+    val connectionKeepers = TrieMap[String, RpcServerConnectionHandler]()
     val configNotify = system.actorOf(Props(classOf[ConfigNotify], connectionKeepers, configService, runtimeService))
-    val eventListener = EventListener[TeleporterEvent[_ <: EventBody]]()
-    val (bind, port, tcpPort) = (brokerConfig.getString("bind"), brokerConfig.getInt("port"), brokerConfig.getInt("tcpPort"))
-    RpcServer(bind, tcpPort, configService, runtimeService, configNotify, connectionKeepers, eventListener)
-    HttpServer(bind, port, configNotify, configService, runtimeService, connectionKeepers, eventListener)
+    val eventListener = EventListener[fbs.RpcMessage]()
+    RpcServer(brokerConfig.getConfig("tcp"), configService, runtimeService, configNotify, connectionKeepers, eventListener)
+    HttpServer(brokerConfig.getConfig("http"), configNotify, configService, runtimeService, connectionKeepers, eventListener)
   }
 }

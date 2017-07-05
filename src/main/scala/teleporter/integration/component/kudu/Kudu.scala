@@ -1,6 +1,7 @@
 package teleporter.integration.component.kudu
 
 import java.sql.{Date, Timestamp}
+import java.util.concurrent.atomic.AtomicInteger
 
 import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.stream.{Attributes, TeleporterAttributes}
@@ -30,6 +31,7 @@ object Kudu {
     val bind = Option(sinkContext.config.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new KuduSinkAsync(
+      name = sinkKey,
       parallelism = sinkConfig.parallelism,
       autoFit = sinkConfig.autoFit,
       _create = (ec) ⇒ Future {
@@ -142,38 +144,42 @@ case class KuduUpdate(table: String, binds: Map[String, Any] = Map.empty, versio
 
 case class KuduUpsert(table: String, binds: Map[String, Any] = Map.empty, version: Long = -1) extends KuduAction
 
-object KuduMetaBean {
+class KuduMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
   val FKuduMaster = "kuduMaster"
   val FWorkerCount = "workerCount"
-}
-
-class KuduMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import KuduMetaBean._
 
   def kuduMaster: String = client[String](FKuduMaster)
 
   def workerCount: Int = client[Int](FWorkerCount)
 }
 
-class KuduSinkAsync(parallelism: Int,
-                    autoFit: String,
-                    _create: (ExecutionContext) ⇒ Future[AsyncKuduClient],
-                    _close: (AsyncKuduClient, ExecutionContext) ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[AsyncKuduClient, Message[KuduRecord], Message[KuduRecord]]("kudu.sink", parallelism) with KuduSupport with Logging {
+class KuduSinkAsync(
+                     name: String = "kudu.sink",
+                     parallelism: Int,
+                     autoFit: String,
+                     _create: (ExecutionContext) ⇒ Future[AsyncKuduClient],
+                     _close: (AsyncKuduClient, ExecutionContext) ⇒ Future[Done])
+  extends CommonSinkAsyncUnordered[AsyncKuduClient, Message[KuduRecord], Message[KuduRecord]](name, parallelism, identity) with KuduSupport with Logging {
   val tables: mutable.Map[String, KuduTable] = mutable.Map[String, KuduTable]()
   var session: AsyncKuduSession = _
+
+  val asyncParallelism = 6
+
+  private def useSync = parallelism < asyncParallelism
 
   override def create(executionContext: ExecutionContext): Future[AsyncKuduClient] = {
     implicit val ec = executionContext
     _create(executionContext).map { _client ⇒
       session = _client.newSession()
-      session.setFlushMode(FlushMode.AUTO_FLUSH_BACKGROUND)
+      session.setFlushMode(if (useSync) FlushMode.AUTO_FLUSH_SYNC else FlushMode.MANUAL_FLUSH)
       _client
     }
   }
 
+  private val count = new AtomicInteger()
+
   override def write(client: AsyncKuduClient, elem: Message[KuduRecord], executionContext: ExecutionContext): Future[Message[KuduRecord]] = {
+    count.incrementAndGet()
     val promise = Promise[Message[KuduRecord]]()
     val data = elem.data
     val tableName = data.table
@@ -190,18 +196,24 @@ class KuduSinkAsync(parallelism: Int,
     session.apply(fillOperation)
       .addCallbacks(new Callback[Object, OperationResponse] {
         override def call(arg: OperationResponse): Object = {
+          promise.success(elem)
+          count.decrementAndGet()
           if (arg.getRowError.getErrorStatus.ok()) {
-            promise.success(elem)
           } else {
             logger.warn(arg.getRowError.toString)
-            null
           }
+          null
         }
       }, new Callback[Object, Exception] {
         override def call(arg: Exception): Object = {
           promise.failure(arg)
+          count.decrementAndGet()
+          null
         }
       })
+    if (!useSync && count.get() > parallelism / 3) {
+      session.flush()
+    }
     promise.future
   }
 

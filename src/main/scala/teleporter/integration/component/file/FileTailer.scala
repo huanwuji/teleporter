@@ -24,11 +24,12 @@ object FileTailer {
   val Read: util.Set[StandardOpenOption] = java.util.Collections.singleton(java.nio.file.StandardOpenOption.READ)
 
   def source(path: Path, offset: Long = 0, end: Boolean = true): Source[ByteString, NotUsed] = {
-    Source.fromGraph(new FileTailer(path, offset, end))
+    Source.fromGraph(new FileTailer(path = path, offset = offset, end = end))
   }
 }
 
-class FileTailer(path: Path, offset: Long, end: Boolean, bufferSize: Int = 4096) extends CommonSource[FileChannel, ByteString]("file.tailer") with Logging {
+class FileTailer(name: String = "file.tailer", path: Path, offset: Long, end: Boolean, bufferSize: Int = 4096)
+  extends CommonSource[FileChannel, ByteString](name) with Logging {
 
   override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.IODispatcher
 
@@ -91,7 +92,7 @@ class FileTailer(path: Path, offset: Long, end: Boolean, bufferSize: Int = 4096)
   }
 
   @scala.throws[Exception](classOf[Exception])
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceGraphStageLogic(shape, create, readData, close, inheritedAttributes) {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceGraphStageLogic(name, shape, create, readData, close, inheritedAttributes) {
     override protected def pushData(): Unit = {
       readData(client) match {
         case None ⇒ scheduleOnce('pull, 1.seconds)

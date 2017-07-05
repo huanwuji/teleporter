@@ -5,14 +5,12 @@ import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.ActorTestMessages.{Ping, Pong}
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
 import teleporter.integration.cluster.broker.PersistentProtocol.{Keys, Tables}
-import teleporter.integration.cluster.instance.Brokers.SendMessage
 import teleporter.integration.cluster.rpc.EventBody.{LinkAddress, LinkVariable}
-import teleporter.integration.cluster.rpc.TeleporterEvent
-import teleporter.integration.cluster.rpc.fbs.EventType
+import teleporter.integration.cluster.rpc.fbs.{MessageType, RpcMessage}
 import teleporter.integration.core.TeleporterContext.{SyncBroker, _}
 import teleporter.integration.supervision.StreamDecider
 import teleporter.integration.utils.Converters._
-import teleporter.integration.utils.{MultiIndexMap, TwoIndexMap}
+import teleporter.integration.utils.{EventListener, MultiIndexMap, TwoIndexMap}
 
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
@@ -168,6 +166,11 @@ trait TeleporterContext extends Addresses {
 class TeleporterContextImpl(val ref: ActorRef, val indexes: TwoIndexMap[Long, ComponentContext]) extends TeleporterContext
 
 class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(implicit center: TeleporterCenter) extends Actor with Logging {
+
+  import context.dispatcher
+
+  implicit val eventListener: EventListener[RpcMessage] = center.eventListener
+
   override def receive: Receive = contextHandle().orElse(triggerChange).orElse(defaultReceive)
 
   private def defaultReceive: Receive = {
@@ -254,19 +257,13 @@ class TeleporterContextActor(indexes: TwoIndexMap[Long, ComponentContext])(impli
     case SyncBroker(ctx) ⇒
       ctx match {
         case ctx: AddressContext ⇒
-          center.eventListener.asyncEvent { seqNr ⇒
-            center.brokers ! SendMessage(
-              TeleporterEvent.request(seqNr = seqNr, eventType = EventType.LinkAddress,
-                body = LinkAddress(address = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
-            )
-          }
+          center.brokerConnection.future.foreach(_.handler.request(MessageType.LinkAddress,
+            LinkAddress(address = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()).toArray
+          ))
         case ctx: VariableContext ⇒
-          center.eventListener.asyncEvent { seqNr ⇒
-            center.brokers ! SendMessage(
-              TeleporterEvent.request(seqNr = seqNr, eventType = EventType.LinkVariable,
-                body = LinkVariable(variableKey = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()))
-            )
-          }
+          center.brokerConnection.future.foreach(_.handler.request(MessageType.LinkVariable,
+            LinkVariable(variableKey = ctx.key, instance = center.instanceKey, keys = ctx.linkKeys.toArray, timestamp = System.currentTimeMillis()).toArray
+          ))
       }
   }
 

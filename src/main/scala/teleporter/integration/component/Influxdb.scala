@@ -29,15 +29,10 @@ object Influxdb {
   }
 }
 
-object InfluxdbMetaBean {
+class InfluxdbMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
   val FHost = "host"
   val FPort = "port"
   val FDb = "db"
-}
-
-class InfluxdbMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import InfluxdbMetaBean._
 
   def host: String = client[String](FHost)
 

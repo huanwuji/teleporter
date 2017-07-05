@@ -15,6 +15,7 @@ import com.google.common.collect.EvictingQueue
 import teleporter.integration
 import teleporter.integration.component.SinkRoller.SinkRollerSetting
 import teleporter.integration.supervision.SinkDecider
+import teleporter.integration.supervision.Supervision.Resume
 import teleporter.integration.utils.MapBean
 import teleporter.integration.utils.MapBean._
 
@@ -150,7 +151,7 @@ final case class SinkRollerGraph[In, Out](
     }
 }
 
-abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape[In, Out]] {
+abstract class CommonSink[C, In, Out](name: String, resumeMap: In ⇒ Out) extends GraphStage[FlowShape[In, Out]] {
   val in: Inlet[In] = Inlet[In](s"$name.in")
   val out: Outlet[Out] = Outlet[Out](s"$name.out")
   override val shape: FlowShape[In, Out] = FlowShape[In, Out](in, out)
@@ -181,7 +182,7 @@ abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape
         try {
           client = create()
         } catch {
-          case NonFatal(ex) ⇒ teleporterFailure(ex)
+          case NonFatal(ex) ⇒ teleporterFailure(name, ex)
         }
       }
 
@@ -197,7 +198,7 @@ abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape
         } catch {
           case NonFatal(ex) ⇒
             lastElem = Some(elem)
-            teleporterFailure(ex)
+            teleporterFailure(name, ex)
         }
       }
 
@@ -234,8 +235,8 @@ abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape
 
       override def supervisionStrategy: SupervisionStrategy = inheritedAttributes.get[SupervisionStrategy].getOrElse(TeleporterAttributes.emptySupervisionStrategy)
 
-      override def teleporterFailure(ex: Throwable): Unit = {
-        super.teleporterFailure(ex)
+      override def teleporterFailure(name: String, ex: Throwable): Unit = {
+        super.teleporterFailure(name, ex)
         matchRule(ex) match {
           case Some(rule) ⇒
             if (rule.directive.retries == -1 || retries < rule.directive.retries) {
@@ -264,7 +265,10 @@ abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape
         case None ⇒
       }
 
-      override def resume(ex: Throwable): Unit = if (!isClosed(in)) pull(in)
+      override def resume(ex: Throwable): Unit = {
+        lastElem.foreach(e ⇒ push(out, resumeMap(e)))
+        if (!isClosed(in)) pull(in)
+      }
 
       override def stop(ex: Throwable): Unit = {
         closeAndThen(() ⇒ failStage(ex))
@@ -274,7 +278,7 @@ abstract class CommonSink[C, In, Out](name: String) extends GraphStage[FlowShape
     }
 }
 
-abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: Int) extends GraphStage[FlowShape[In, Out]] {
+abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: Int, resumeMap: In ⇒ Out) extends GraphStage[FlowShape[In, Out]] {
   val in: Inlet[In] = Inlet[In](s"$name.in")
   val out: Outlet[Out] = Outlet[Out](s"$name.out")
   override val shape: FlowShape[In, Out] = FlowShape[In, Out](in, out)
@@ -322,12 +326,12 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
             client = res
             if (isAvailable(in)) onPush()
             if (withPull) onPull()
-          case scala.util.Failure(t) ⇒ teleporterFailure(t)
+          case scala.util.Failure(t) ⇒ teleporterFailure(name, t)
         }
         try {
           create(executionContext).onComplete(cb.invoke)
         } catch {
-          case NonFatal(ex) ⇒ teleporterFailure(ex)
+          case NonFatal(ex) ⇒ teleporterFailure(name, ex)
         }
       }
 
@@ -343,10 +347,10 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
             } else buffer.add(elem)
           case other ⇒
             val ex = other match {
-              case Failure(t) ⇒ retriesBuffer.add(inElem); t
+              case Failure(t) ⇒ t
               case Success(s) if s == null ⇒ new NullPointerException("result can't be null")
             }
-            teleporterFailure(ex)
+            elementFailure(inElem, ex)
         }
       }
 
@@ -354,24 +358,35 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
       private val invokeFutureCB: ((In, Try[Out])) ⇒ Unit = futureCB.invoke
 
       override def onPush(): Unit = {
+        if (client == null) return
+        inFlight += 1
+        writeElement(grab(in))
+      }
+
+      private def writeElement(elem: In): Unit = {
         try {
-          if (client == null) return
-          val elem = if (!retriesBuffer.isEmpty) {
-            retriesBuffer.remove()
-          } else {
-            val grabElem = grab(in)
-            inFlight += 1
-            grabElem
-          }
           val future = write(client, elem, executionContext)
           future.value match {
             case None ⇒ future.onComplete(invokeFutureCB(elem, _))
             case Some(v) ⇒ futureCompleted((elem, v))
           }
         } catch {
-          case NonFatal(ex) ⇒ teleporterFailure(ex)
+          case NonFatal(ex) ⇒ elementFailure(elem, ex)
         }
         if (todo < parallelism && !hasBeenPulled(in)) tryPull(in)
+      }
+
+      private def elementFailure(elem: In, ex: Throwable): Unit = {
+        if (matchRule(ex).exists(_.directive.isInstanceOf[Resume])) {
+          inFlight -= 1
+          if (isAvailable(out)) {
+            if (!hasBeenPulled(in)) tryPull(in)
+            push(out, resumeMap(elem))
+          } else buffer.add(resumeMap(elem))
+        } else {
+          retriesBuffer.add(elem)
+          teleporterFailure(name, ex)
+        }
       }
 
       override def onPull(): Unit = {
@@ -382,7 +397,6 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
       }
 
       override def onUpstreamFinish(): Unit = {
-        logger.info("Sink Is down stream really finish, onUpstreamFinish")
         if (todo == 0 && !isClosed(in)) closeAndThen(super.onUpstreamFinish)
       }
 
@@ -391,13 +405,11 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
 
       @scala.throws[Exception](classOf[Exception])
       override def onDownstreamFinish(): Unit = {
-        logger.info("Sink Is down stream really finish, onDownstreamFinish")
         closeAndThen(super.onDownstreamFinish)
       }
 
       @scala.throws[Exception](classOf[Exception])
       override def onUpstreamFailure(ex: Throwable): Unit = {
-        logger.info("Sink Is down stream really finish, onUpstreamFailure", ex)
         closeAndThen(() ⇒ super.onUpstreamFailure(ex))
       }
 
@@ -426,8 +438,8 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
 
       override def supervisionStrategy: SupervisionStrategy = inheritedAttributes.get[SupervisionStrategy].getOrElse(TeleporterAttributes.emptySupervisionStrategy)
 
-      override def teleporterFailure(ex: Throwable): Unit = {
-        super.teleporterFailure(ex)
+      override def teleporterFailure(name: String, ex: Throwable): Unit = {
+        super.teleporterFailure(name, ex)
         matchRule(ex) match {
           case Some(rule) ⇒
             if (rule.directive.retries == -1 || (retriesBuffer.isEmpty || (!retriesBuffer.isEmpty && retries / retriesBuffer.size() < rule.directive.retries))) {
@@ -450,13 +462,10 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
       }
 
       override def retry(ex: Throwable): Unit = {
-        if (!retriesBuffer.isEmpty) teleporterFailure(ex) //not good
+        writeElement(retriesBuffer.remove())
       }
 
       override def resume(ex: Throwable): Unit = {
-        inFlight -= 1
-        if (isClosed(in) && todo == 0) closeAndThen(completeStage)
-        else if (!hasBeenPulled(in)) tryPull(in)
       }
 
       override def stop(ex: Throwable): Unit = {

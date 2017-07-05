@@ -64,6 +64,8 @@ case class AckMessage[XY, T](id: TId, coordinate: XY, data: T, confirmed: TId â‡
 
   def toMessage[B]: Message[B] = asInstanceOf[Message[B]]
 
+  def switchChannel(channelId: Int): AckMessage[XY, T] = this.copy(id = this.id.switchChannel(channelId))
+
   override def to[B](data: B): Message[B] = this.copy(data = data)
 }
 

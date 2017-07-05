@@ -15,7 +15,7 @@ import scala.util.Random
   * Created by huanwuji 
   * date 2017/1/17.
   */
-class TestSink() extends CommonSink[Int, Int, Unit]("test.sink") {
+class TestSink() extends CommonSink[Int, Int, Unit]("test.sink", m ⇒ m) {
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.CacheDispatcher
 
   override def create(): Int = {
@@ -34,7 +34,7 @@ class TestSink() extends CommonSink[Int, Int, Unit]("test.sink") {
 }
 
 class TestSinkAsync(parallelism: Int, _create: (ExecutionContext) ⇒ Future[Int], _close: (Int, ExecutionContext) ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[Int, Int, Int]("test.sink.async", parallelism) with SqlSupport {
+  extends CommonSinkAsyncUnordered[Int, Int, Int]("test.sink.async", parallelism, m ⇒ m) with SqlSupport {
   override def create(executionContext: ExecutionContext): Future[Int] = _create(executionContext)
 
   override def write(client: Int, elem: Int, executionContext: ExecutionContext): Future[Int] = {

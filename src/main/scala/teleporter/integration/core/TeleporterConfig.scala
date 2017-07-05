@@ -9,10 +9,9 @@ import akka.util.Timeout
 import org.apache.logging.log4j.scala.Logging
 import teleporter.integration.cluster.broker.PersistentProtocol.Keys._
 import teleporter.integration.cluster.broker.PersistentProtocol.{KeyValue, Keys, Tables}
-import teleporter.integration.cluster.instance.Brokers.SendMessage
-import teleporter.integration.cluster.rpc.EventBody.{ConfigChangeNotify, KVGet, KVS}
+import teleporter.integration.cluster.rpc.EventBody.{ConfigChangeNotify, KVGet}
 import teleporter.integration.cluster.rpc._
-import teleporter.integration.cluster.rpc.fbs.{EventStatus, EventType, Role}
+import teleporter.integration.cluster.rpc.fbs.{MessageStatus, MessageType}
 import teleporter.integration.core.TeleporterConfigActor.LoadStream
 import teleporter.integration.core.TeleporterContext.{Update, Upsert}
 import teleporter.integration.supervision.StreamDecider
@@ -27,7 +26,12 @@ import scala.util.{Failure, Success}
   * Author: kui.dai
   * Date: 2015/11/16.
   */
-trait ConfigMetaBean extends MapMetaBean with ConfigMetaBeanFields {
+trait ConfigMetaBean extends MapMetaBean {
+  val FId = "id"
+  val FKey = "key"
+  val FArguments = "arguments"
+  val FExtraKeys = "extraKeys"
+  val FErrorRules = "errorRules"
 
   def id: Long = apply[Long](FId)
 
@@ -38,23 +42,11 @@ trait ConfigMetaBean extends MapMetaBean with ConfigMetaBeanFields {
   def errorRules: Seq[String] = this.gets[String](FErrorRules)
 }
 
-trait ConfigMetaBeanFields {
-  val FId = "id"
-  val FKey = "key"
-  val FArguments = "arguments"
-  val FExtraKeys = "extraKeys"
-  val FErrorRules = "errorRules"
-}
-
 class PartitionMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
 
-  import PartitionMetaBean._
+  val FKeys = "keys"
 
   def keys: Seq[String] = this.gets[String](FKeys)
-}
-
-object PartitionMetaBean {
-  val FKeys = "keys"
 }
 
 class TaskMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
@@ -71,8 +63,9 @@ object StreamStatus {
 }
 
 class StreamMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
-
-  import StreamMetaBean._
+  val FTemplate = "template"
+  val FStatus = "status"
+  val FCron = "cron"
 
   def template: Option[String] = this.get[String](FTemplate)
 
@@ -83,29 +76,21 @@ class StreamMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
   def cronOption: Option[String] = this.get[String](FCron)
 }
 
-object StreamMetaBean {
-  val FTemplate = "template"
-  val FStatus = "status"
-  val FCron = "cron"
-}
-
 class AddressMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
-
-  import AddressMetaBean._
+  val FCategory = "category"
+  val FClient = "client"
 
   def category: String = apply[String](FCategory)
 
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
 }
 
-object AddressMetaBean {
-  val FCategory = "category"
-  val FClient = "client"
-}
-
 class SourceMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
-
-  import SourceMetaBean._
+  val FCategory = "category"
+  val FAddress = "address"
+  val FAddressKey = "key"
+  val FAddressBind = "bind"
+  val FClient = "client"
 
   def category: String = apply[String](FCategory)
 
@@ -120,17 +105,12 @@ class SourceMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
 }
 
-object SourceMetaBean {
+class SinkMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
   val FCategory = "category"
   val FAddress = "address"
   val FAddressKey = "key"
   val FAddressBind = "bind"
   val FClient = "client"
-}
-
-class SinkMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
-
-  import SinkMetaBean._
 
   def category: String = apply[String](FCategory)
 
@@ -139,14 +119,6 @@ class SinkMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
   def addressBind: String = get[String](FAddress, FAddressBind).filter(_.nonEmpty).orNull
 
   def client: MapBean = this.get[MapBean](FClient).getOrElse(MapBean.empty)
-}
-
-object SinkMetaBean {
-  val FCategory = "category"
-  val FAddress = "address"
-  val FAddressKey = "key"
-  val FAddressBind = "bind"
-  val FClient = "client"
 }
 
 class VariableMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean
@@ -175,13 +147,13 @@ object TeleporterConfigActor {
 
   case class LoadExtra(key: String, trigger: Boolean = true)
 
-  def apply(eventListener: EventListener[TeleporterEvent[_ <: EventBody]])
+  def apply(eventListener: EventListener[fbs.RpcMessage])
            (implicit center: TeleporterCenter): ActorRef = {
     center.system.actorOf(Props(classOf[TeleporterConfigActor], eventListener, center), "teleporter-config")
   }
 }
 
-class TeleporterConfigActor(eventListener: EventListener[TeleporterEvent[_ <: EventBody]])
+class TeleporterConfigActor(eventListener: EventListener[fbs.RpcMessage])
                            (implicit center: TeleporterCenter) extends Actor with Logging {
 
   import TeleporterConfigActor._
@@ -400,6 +372,8 @@ trait TeleporterConfigClient extends Logging {
 
   import center.system.dispatcher
 
+  implicit val eventListener: EventListener[fbs.RpcMessage] = center.eventListener
+
   private implicit val timeout: Timeout = 10.seconds
 
   def streamStatus(key: String, status: String): Unit = {
@@ -423,77 +397,52 @@ trait TeleporterConfigClient extends Logging {
 
   def getConfig(key: String): Future[KeyValue] = {
     require(key.nonEmpty, "Key can't empty to load")
-    center.eventListener.asyncEvent({ seqNr ⇒
-      center.brokers ! SendMessage(
-        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVGet, body = KVGet(key))
-      )
-    }, center.eventListener.timeoutMessageHandler(s"get $key"))
-      ._2.map(e ⇒ e.toBody[EventBody.KV].keyValue)
+    center.brokerConnection.future.flatMap(_.handler.request(MessageType.KVGet, KVGet(key).toArray))
+      .map(message ⇒ RpcResponse.decode(message, EventBody.KV(_)).body.get.keyValue)
   }
 
   def getRangeRegexConfig(key: String, start: Int = 0, limit: Int = Int.MaxValue): Future[Seq[KeyValue]] = {
-    center.eventListener.asyncEvent({ seqNr ⇒
-      center.brokers ! SendMessage(
-        TeleporterEvent(seqNr = seqNr, eventType = EventType.RangeRegexKV, role = Role.Request,
-          body = Some(EventBody.RangeRegexKV(key = key, start = start, limit = limit)))
-      )
-    }, center.eventListener.timeoutMessageHandler(s"get range $key"))
-      ._2.map(e ⇒ e.toBody[KVS].kvs.map(kv ⇒ KeyValue(kv.key, kv.value)))
+    center.brokerConnection.future.flatMap(_.handler
+      .request(MessageType.RangeRegexKV, EventBody.RangeRegexKV(key = key, start = start, limit = limit).toArray))
+      .map(message ⇒ RpcResponse.decode(message, EventBody.KVS(_).kvs.map(kv ⇒ KeyValue(kv.key, kv.value))).body.get)
   }
 
   def save(key: String, value: String): Future[Done] = {
-    center.eventListener.asyncEvent({ seqNr ⇒
-      center.brokers ! SendMessage(
-        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVSave,
-          body = EventBody.KV(key = key, value = value))
-      )
-    }, center.eventListener.timeoutMessageHandler(s"save $key"))
-      ._2.map {
-      case e if e.status == EventStatus.Success ⇒ Done
-      case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
-    }
+    center.brokerConnection.future.flatMap(_.handler.request(MessageType.KVSave, EventBody.KV(key = key, value = value).toArray))
+      .map {
+        case e if e.status == MessageStatus.Success ⇒ Done
+        case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
+      }
   }
 
   def atomicSave(key: String, expect: String, update: String): Future[Boolean] = {
-    center.eventListener.asyncEvent({ seqNr ⇒
-      center.brokers ! SendMessage(
-        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.AtomicSaveKV,
-          body = EventBody.AtomicKV(key = key, expect = expect, update = update))
-      )
-    }, center.eventListener.timeoutMessageHandler(s"atomic save $key"))
-      ._2.map {
-      e ⇒
-        if (e.status == EventStatus.Failure) {
-          logger.warn(s"$key save failed, ${e.message}")
+    center.brokerConnection.future.flatMap(_.handler.request(MessageType.AtomicSaveKV,
+      EventBody.AtomicKV(key = key, expect = expect, update = update).toArray))
+      .map { message ⇒
+        if (message.status == MessageStatus.Failure) {
+          val response = RpcResponse.decode(message, new String(_))
+          logger.warn(s"$key save failed, ${response.body.getOrElse("")}")
         }
-        e.status == EventStatus.Success
-    }
+        message.status == MessageStatus.Success
+      }
   }
 
   def remove(key: String): Future[Done] = {
-    center.eventListener.asyncEvent({ seqNr ⇒
-      center.brokers ! SendMessage(
-        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.KVRemove,
-          body = EventBody.KVRemove(key = key))
-      )
-    }, center.eventListener.timeoutMessageHandler(s"remove $key"))
-      ._2.map {
-      case e if e.status == EventStatus.Success ⇒ Done
-      case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
-    }
+    center.brokerConnection.future.flatMap(_.handler.request(MessageType.KVRemove,
+      EventBody.KVRemove(key = key).toArray))
+      .map {
+        case e if e.status == MessageStatus.Success ⇒ Done
+        case _ ⇒ throw new RuntimeException(s"$key, value remove failed!")
+      }
   }
 
   def notify(key: String, action: Byte): Future[Done] = {
-    center.eventListener.asyncEvent({ seqNr ⇒
-      center.brokers ! SendMessage(
-        TeleporterEvent.request(seqNr = seqNr, eventType = EventType.ConfigChangeNotify,
-          body = ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()))
-      )
-    }, center.eventListener.timeoutMessageHandler(s"notify $key"))
-      ._2.map {
-      case e if e.status == EventStatus.Success ⇒ Done
-      case _ ⇒ throw new RuntimeException(s"$key, value save failed!")
-    }
+    center.brokerConnection.future.flatMap(_.handler.request(MessageType.ConfigChangeNotify,
+      ConfigChangeNotify(key = key, action = action, timestamp = System.currentTimeMillis()).toArray))
+      .map {
+        case e if e.status == MessageStatus.Success ⇒ Done
+        case _ ⇒ throw new RuntimeException(s"$key, value notify failed!")
+      }
   }
 }
 

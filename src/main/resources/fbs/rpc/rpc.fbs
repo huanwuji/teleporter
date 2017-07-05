@@ -1,6 +1,6 @@
 namespace teleporter.integration.cluster.rpc.fbs;
 
-enum EventType:byte {
+enum MessageType:byte {
     None = -1,
     KVGet = 0,
     RangeRegexKV = 1,
@@ -20,7 +20,7 @@ enum EventType:byte {
     ConfigChangeNotify = 40,
 }
 
-enum EventStatus:byte {
+enum MessageStatus:byte {
     Failure, Success, None
 }
 
@@ -28,12 +28,11 @@ enum Role:byte {
     Request, Response
 }
 
-table RpcEvent {
+table RpcMessage {
     seqNr:long;
-    eventType:EventType;
+    messageType:MessageType;
     role:Role;
-    status:EventStatus;
-    message:string;
+    status:MessageStatus;
     body:[byte];
 }
 

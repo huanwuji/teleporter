@@ -124,7 +124,13 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
       val streamLogic = streamLogicCache.get(Hashing.md5().hashString(template, Charsets.UTF_8).toString,
         new Callable[StreamLogic]() {
           override def call(): StreamLogic = {
-            ScriptEngines.scala.eval(template).asInstanceOf[StreamLogic]
+            try {
+              ScriptEngines.scala.eval(template).asInstanceOf[StreamLogic]
+            } catch {
+              case e: Exception ⇒
+                logger.error(s"$key template load error, ${e.getMessage}", e)
+                throw e
+            }
           }
         })
       val result = streamLogic(key, center)
@@ -140,7 +146,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
           logger.info(s"$key was completed, $v")
         case Failure(e) ⇒
           center.client.streamStatus(key, StreamStatus.FAILURE)
-          center.context.getContext[StreamContext](key).decider.teleporterFailure(e)
+          center.context.getContext[StreamContext](key).decider.teleporterFailure(key, e)
           logger.warn(s"$key execute failed", e)
       }
   }

@@ -38,6 +38,7 @@ object Hbase {
     val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new HbaseSink(
+      name = sinkKey,
       parallelism = sinkConfig.parallelism,
       _create = () ⇒ Future {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
@@ -56,6 +57,7 @@ object Hbase {
     val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new HbaseBulkSink(
+      name = sinkKey,
       parallelism = sinkConfig.parallelism,
       _create = ec ⇒ Future {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
@@ -88,22 +90,19 @@ case class HbaseAction(tableName: String, row: Row)
 
 case class HbaseOut(source: HbaseAction, result: Object)
 
-object HbaseSinkMetaBean {
-  val FParallelism = "parallelism"
-}
-
 class HbaseSinkMetaBean(override val underlying: Map[String, Any]) extends SinkMetaBean(underlying) {
-
-  import HbaseSinkMetaBean._
+  val FParallelism = "parallelism"
 
   def parallelism: Int = client.get[Int](FParallelism).getOrElse(1)
 }
 
-class HbaseSink(
-                 parallelism: Int,
-                 _create: () ⇒ Future[Connection],
-                 _close: Connection ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[Connection, Message[HbaseRecord], Message[HbaseResult]]("hbase.sink", parallelism) {
+class HbaseSink(name: String = "hbase.sink",
+                parallelism: Int,
+                _create: () ⇒ Future[Connection],
+                _close: Connection ⇒ Future[Done])
+  extends CommonSinkAsyncUnordered[Connection, Message[HbaseRecord], Message[HbaseResult]](name, parallelism, m ⇒ m.map {
+    m ⇒ HbaseOut(m, new Array[Object](0))
+  }) {
 
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 
@@ -130,10 +129,13 @@ class HbaseSink(
   }
 }
 
-class HbaseBulkSink(parallelism: Int,
+class HbaseBulkSink(name: String = "hbase.sink",
+                    parallelism: Int,
                     _create: (ExecutionContext) ⇒ Future[Connection],
                     _close: (Connection, ExecutionContext) ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[Connection, Seq[Message[HbaseRecord]], Seq[Message[HbaseResult]]]("hbase.sink", parallelism) {
+  extends CommonSinkAsyncUnordered[Connection, Seq[Message[HbaseRecord]], Seq[Message[HbaseResult]]](name, parallelism, s ⇒ s.map {
+    m ⇒ m.map(e ⇒ HbaseOut(e, new Array[Object](0)))
+  }) {
 
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
   private val tables: mutable.Map[String, Table] = mutable.Map[String, Table]()
@@ -160,17 +162,12 @@ class HbaseBulkSink(parallelism: Int,
   }
 }
 
-object HbaseMetaBean {
+class HbaseMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
   val FHosts = "hosts"
   val FCoreSite = "core-site.xml"
   val FHdfsSite = "hdfs-site.xml"
   val FSslClient = "ssl-client.xml"
   val FHbaseSite = "hbase-site.xml"
-}
-
-class HbaseMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import HbaseMetaBean._
 
   def hosts: Option[String] = client.get[String](FHosts)
 

@@ -19,16 +19,11 @@ import scala.concurrent.{ExecutionContext, Future}
 /**
   * Created by kui.dai on 2016/7/7.
   */
-object GitMetadataBean {
+class GitMetadataBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
   val FHost = "host"
   val FPort = "port"
   val FUsername = "username"
   val FPassword = "password"
-}
-
-class GitMetadataBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import GitMetadataBean._
 
   def host: String = client[String](FHost)
 

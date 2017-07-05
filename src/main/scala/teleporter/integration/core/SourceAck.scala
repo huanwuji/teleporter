@@ -25,17 +25,12 @@ import scala.util.{Failure, Success, Try}
   * Created by huanwuji 
   * date 2016/12/23.
   */
-object SourceAckMetaBean {
+class SourceAckMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
   val FAck = "ack"
   val FChannelSize = "channelSize"
   val FCommitInterval = "commitInterval"
   val FCacheSize = "cacheSize"
   val FMaxAge = "maxAge"
-}
-
-class SourceAckMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
-
-  import SourceAckMetaBean._
 
   def ack: MapBean = apply[MapBean](FAck)
 

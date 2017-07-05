@@ -34,6 +34,7 @@ trait Jdbc {
     val bind = Option(sourceConfig.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     Source.fromGraph(new JdbcSource(
+      name = sourceKey,
       sql = sourceConfig.sql,
       rollerContext = RollerContext(sourceContext.config),
       _create = () ⇒ center.context.register(addressKey, bind, () ⇒ address(addressKey)).client,
@@ -54,6 +55,7 @@ trait Jdbc {
     val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new JdbcSink(
+      name = sinkKey,
       parallelism = sinkConfig.parallelism,
       _create = (ec) ⇒ Future {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
@@ -83,16 +85,11 @@ trait Jdbc {
 
 object Jdbc extends Jdbc
 
-object JdbcAddressMetaBean {
+class JdbcAddressMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
   val FHost = "host"
   val FDatabase = "database"
   val FUsername = "username"
   val FPassword = "password"
-}
-
-class JdbcAddressMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import JdbcAddressMetaBean._
 
   def host: String = client[String](FHost)
 
@@ -103,30 +100,21 @@ class JdbcAddressMetaBean(override val underlying: Map[String, Any]) extends Add
   def password: String = client[String](FPassword)
 }
 
-object JdbcSourceMetaBean {
-  val FSql = "sql"
-}
-
 class JdbcSourceMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
-
-  import JdbcSourceMetaBean._
+  val FSql = "sql"
 
   def sql: String = client[String](FSql)
 }
 
-object JdbcSinkMetaBean {
-  val FParallelism = "parallelism"
-}
-
 class JdbcSinkMetaBean(override val underlying: Map[String, Any]) extends SinkMetaBean(underlying) {
-
-  import JdbcSinkMetaBean._
+  val FParallelism = "parallelism"
 
   def parallelism: Int = client.get[Int](FParallelism).getOrElse(1)
 }
 
-class JdbcSource(sql: String, rollerContext: RollerContext, _create: () ⇒ DataSource, _close: DataSource ⇒ Unit)
-  extends RollerSource[DataSource, SourceMessage[RollerContext, JdbcMessage]]("jdbc.source", rollerContext) with SqlSupport {
+class JdbcSource(name: String = "jdbc.source",
+                 sql: String, rollerContext: RollerContext, _create: () ⇒ DataSource, _close: DataSource ⇒ Unit)
+  extends RollerSource[DataSource, SourceMessage[RollerContext, JdbcMessage]](name, rollerContext) with SqlSupport {
 
   override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 
@@ -160,9 +148,10 @@ class JdbcSource(sql: String, rollerContext: RollerContext, _create: () ⇒ Data
   }
 }
 
-class JdbcSink(parallelism: Int, _create: (ExecutionContext) ⇒ Future[DataSource],
+class JdbcSink(name: String = "jdbc.sink",
+               parallelism: Int, _create: (ExecutionContext) ⇒ Future[DataSource],
                _close: (DataSource, ExecutionContext) ⇒ Future[Done])(implicit val center: TeleporterCenter)
-  extends CommonSinkAsyncUnordered[DataSource, Message[JdbcRecord], Message[JdbcRecord]]("jdbc.sink", parallelism) with SqlSupport {
+  extends CommonSinkAsyncUnordered[DataSource, Message[JdbcRecord], Message[JdbcRecord]](name, parallelism, identity) with SqlSupport {
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 
   override def create(executionContext: ExecutionContext): Future[DataSource] = _create(executionContext)

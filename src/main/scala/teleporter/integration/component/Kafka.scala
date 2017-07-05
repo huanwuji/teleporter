@@ -1,6 +1,7 @@
 package teleporter.integration.component
 
 import java.util.Properties
+import java.util.concurrent.Executors
 
 import akka.stream._
 import akka.stream.scaladsl.{Flow, GraphDSL, Keep, Merge, Sink, Source}
@@ -10,11 +11,12 @@ import kafka.consumer.{ConsumerConfig, ConsumerIterator, KafkaStream}
 import kafka.javaapi.consumer.ZkKafkaConsumerConnector
 import kafka.message.MessageAndMetadata
 import org.apache.kafka.clients.producer._
+import org.apache.kudu.client.shaded.com.google.common.util.concurrent.ThreadFactoryBuilder
 import teleporter.integration.core._
 import teleporter.integration.metrics.Metrics
 
 import scala.collection.JavaConverters._
-import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.concurrent._
 
 /**
   * date 2015/8/3.
@@ -117,27 +119,26 @@ object Kafka {
 }
 
 class KafkaSource(threadName: String, kafkaStream: KafkaStream[Array[Byte], Array[Byte]])
-  extends CommonSource[NotUsed, KafkaMessage]("KafkaSource") {
-  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.CacheDispatcher
+  extends CommonSourceAsync[KafkaMessage, ConsumerIterator[Array[Byte], Array[Byte]]]("KafkaSource") {
+  val executionContext: ExecutionContextExecutorService = ExecutionContext.fromExecutorService(Executors
+    .newFixedThreadPool(1, new ThreadFactoryBuilder().setNameFormat(s"kafka-$threadName-%d").build()))
 
-  private var iterator: ConsumerIterator[Array[Byte], Array[Byte]] = _
-
-  override def create(): NotUsed = {
-    iterator = kafkaStream.iterator()
-    val thread = Thread.currentThread()
-    thread.setName(s"$threadName-${thread.getName}")
-    NotUsed
+  override def create(ec: ExecutionContext): Future[ConsumerIterator[Array[Byte], Array[Byte]]] = {
+    Future {
+      kafkaStream.iterator()
+    }(executionContext)
   }
 
-  override def readData(client: NotUsed): Option[KafkaMessage] = {
-    val message = Option(iterator.next())
-    message match {
-      case Some(_) ⇒ message
-      case None ⇒ readData(client)
-    }
+  override def readData(client: ConsumerIterator[Array[Byte], Array[Byte]], ec: ExecutionContext): Future[Option[KafkaMessage]] = {
+    Future {
+      Option(client.next())
+    }(executionContext)
   }
 
-  override def close(client: NotUsed): Unit = {}
+  override def close(client: ConsumerIterator[Array[Byte], Array[Byte]], ec: ExecutionContext): Future[Done] = {
+    executionContext.shutdownNow()
+    Future.successful(Done)
+  }
 }
 
 class KafkaConsumer(val zkKafkaConnector: ZkKafkaConsumerConnector, topics: Map[String, Integer]) extends AutoCloseable {
@@ -167,13 +168,8 @@ class KafkaConsumer(val zkKafkaConnector: ZkKafkaConsumerConnector, topics: Map[
   override def close(): Unit = zkKafkaConnector.shutdown()
 }
 
-object KafkaSourceMetaBean {
-  val FTopics = "topics"
-}
-
 class KafkaSourceMetaBean(override val underlying: Map[String, Any]) extends SourceMetaBean(underlying) {
-
-  import KafkaSourceMetaBean._
+  val FTopics = "topics"
 
   def topics: String = client[String](FTopics)
 }
@@ -181,7 +177,7 @@ class KafkaSourceMetaBean(override val underlying: Map[String, Any]) extends Sou
 class KafkaSinkAsync(parallelism: Int = 1,
                      _create: (ExecutionContext) ⇒ Future[Producer[Array[Byte], Array[Byte]]],
                      _close: (Producer[Array[Byte], Array[Byte]], ExecutionContext) ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[Producer[Array[Byte], Array[Byte]], Message[KafkaRecord], Message[KafkaRecord]]("kafka.sink", parallelism) {
+  extends CommonSinkAsyncUnordered[Producer[Array[Byte], Array[Byte]], Message[KafkaRecord], Message[KafkaRecord]]("kafka.sink", parallelism, identity) {
   override def create(executionContext: ExecutionContext): Future[Producer[Array[Byte], Array[Byte]]] = _create(executionContext)
 
   override def write(client: Producer[Array[Byte], Array[Byte]], elem: Message[KafkaRecord], executionContext: ExecutionContext): Future[Message[KafkaRecord]] = {

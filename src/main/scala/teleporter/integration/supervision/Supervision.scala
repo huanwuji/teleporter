@@ -79,7 +79,7 @@ object Decider {
 trait Decider extends Logging {
   def supervisionStrategy: TeleporterAttributes.SupervisionStrategy
 
-  def teleporterFailure(ex: Throwable): Unit = logger.error(s"Exception was catch and process, ${ex.getMessage}", ex)
+  def teleporterFailure(name: String, ex: Throwable): Unit = logger.error(s"$name Exception, ${ex.getMessage}", ex)
 
   protected def matchRule(ex: Throwable): Option[DecideRule] = {
     supervisionStrategy match {
@@ -104,8 +104,8 @@ class StreamDecider(key: String, streamRef: ActorRef, val supervisionStrategy: S
   var retries = 0
   var lastExecuteTime: Long = System.currentTimeMillis()
 
-  override def teleporterFailure(ex: Throwable): Unit = {
-    super.teleporterFailure(ex)
+  override def teleporterFailure(name: String, ex: Throwable): Unit = {
+    super.teleporterFailure(name, ex)
     lastExecuteTime = System.currentTimeMillis()
     if (System.currentTimeMillis() - lastExecuteTime > 5.minutes.toMillis) {
       retries = 0

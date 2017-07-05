@@ -8,7 +8,7 @@ import java.util
 import java.util.Base64
 
 import akka.stream.scaladsl.{Flow, FlowOpsMat, Framing, Keep, Sink, Source}
-import akka.stream.{Attributes, Materializer, TeleporterAttributes}
+import akka.stream.{Attributes, Materializer, TeleporterAttributes, ThrottleMode}
 import akka.util.ByteString
 import akka.{Done, NotUsed}
 import org.apache.logging.log4j.scala.Logging
@@ -21,6 +21,7 @@ import teleporter.integration.utils.{Command, MapBean}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.concurrent.Future
+import scala.concurrent.duration._
 
 /**
   * Created by huanwuji 
@@ -40,6 +41,7 @@ object FileStreams {
     val sourceContext = center.context.getContext[SourceContext](sourceKey)
     val sourceConfig = sourceContext.config.mapTo[FileSourceMetaBean]
     val source = Source.fromGraph(new FileSource(
+      name = sourceKey,
       path = Paths.get(sourceConfig.path),
       offset = sourceConfig.offset,
       len = sourceConfig.len,
@@ -58,6 +60,7 @@ object FileStreams {
     val sinkContext = center.context.getContext[SinkContext](sinkKey)
     val sinkConfig = sinkContext.config.mapTo[FileSinkMetaBean]
     val fileFlow = Flow.fromGraph(new FileSink(
+      name = sinkKey,
       path = sinkConfig.path,
       openOptions = sinkConfig.openOptions,
       offset = sinkConfig.offset
@@ -95,7 +98,11 @@ object FileStreams {
   }
 
   def scan(path: Path, offset: Long, limit: Long): Source[ByteString, NotUsed] = {
-    Source.fromGraph(new FileSource(path, offset, limit, 8092))
+    Source.fromGraph(new FileSource(
+      path = path,
+      offset = offset,
+      len = limit,
+      bufferSize = 8092))
   }
 }
 
@@ -126,7 +133,11 @@ object FileCmd {
     }
 
     def parse(cmd: Seq[String]): Option[Source[ByteString, NotUsed]] = {
-      parser.parse(cmd, Scan()).map(scan ⇒ Source.fromGraph(new FileSource(scan.path, scan.offset, scan.limit, 8092)))
+      parser.parse(cmd, Scan()).map(scan ⇒ Source.fromGraph(new FileSource(
+        path = scan.path,
+        offset = scan.offset,
+        len = scan.limit,
+        bufferSize = 8092)))
     }
   }
 
@@ -166,6 +177,23 @@ object FileCmd {
     }
   }
 
+  case class RateLimiter(rate: Int = 10)
+
+  object RateLimiter {
+    val parser = new scopt.OptionParser[RateLimiter]("rate") {
+      arg[Int]("<rate>").required().text("output rate").action((x, c) ⇒ c.copy(rate = x))
+    }
+
+    def parse(cmd: Seq[String]): Option[Flow[ByteString, ByteString, NotUsed]] = {
+      parser.parse(cmd, RateLimiter()).map(rateLimiter ⇒ Flow[ByteString].throttle(
+        elements = rateLimiter.rate,
+        per = 1.seconds,
+        maximumBurst = 10,
+        ThrottleMode.shaping
+      ))
+    }
+  }
+
   def exec(cmd: String): Source[ByteString, NotUsed] = {
     val pipeStreams: Array[FlowOpsMat[ByteString, NotUsed]] = cmd.split("\\|").map(_.replaceFirst("^\\s+", ""))
       .map(Command.cmdSplit)
@@ -175,6 +203,7 @@ object FileCmd {
         case "grep" :: tail ⇒ Grep.parse(tail)
         case "ls" :: tail ⇒ Ls.parse(tail).map(files ⇒ Source(files.map(ByteString(_)).toIndexedSeq))
         case "st" :: tail ⇒ Separator.parse(tail)
+        case "rate" :: tail ⇒ RateLimiter.parse(tail)
       }
     if (pipeStreams.isEmpty) Source.single(ByteString("Cmd not found"))
     else if (pipeStreams.length == 1) pipeStreams.head.asInstanceOf[Source[ByteString, NotUsed]]
@@ -187,18 +216,12 @@ object FileCmd {
   }
 }
 
-object FileSourceMetaBean {
+class FileSourceMetaBean(override val underlying: JdbcMessage) extends SourceMetaBean(underlying) {
   val FPath = "path"
   val FOffset = "offset"
   val FLen = "len"
   val FBufferSize = "bufferSize"
   val FDelimiter = "delimiter"
-}
-
-class FileSourceMetaBean(override val underlying: JdbcMessage) extends SourceMetaBean(underlying) {
-
-  import FileSourceMetaBean._
-  import SourceMetaBean._
 
   def path: String = client[String](FPath)
 
@@ -213,8 +236,8 @@ class FileSourceMetaBean(override val underlying: JdbcMessage) extends SourceMet
   def delimiter: Option[ByteString] = client.get[String](FDelimiter).map(Base64.getDecoder.decode(_)).map(ByteString(_))
 }
 
-class FileSource(path: Path, offset: Long, len: Long = Long.MaxValue, bufferSize: Int)
-  extends CommonSource[FileChannel, ByteString]("FileSource") {
+class FileSource(name: String = "FileSource", path: Path, offset: Long, len: Long = Long.MaxValue, bufferSize: Int)
+  extends CommonSource[FileChannel, ByteString](name) {
   override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.IODispatcher
 
   val buf: ByteBuffer = ByteBuffer.allocate(bufferSize)
@@ -244,15 +267,10 @@ class FileSource(path: Path, offset: Long, len: Long = Long.MaxValue, bufferSize
   override def close(client: FileChannel): Unit = client.close()
 }
 
-object FileSinkMetaBean {
+class FileSinkMetaBean(override val underlying: JdbcMessage) extends SinkMetaBean(underlying) {
   val FPath = "path"
   val FOffset = "offset"
   val FOpenOptions = "openOptions"
-}
-
-class FileSinkMetaBean(override val underlying: JdbcMessage) extends SinkMetaBean(underlying) {
-
-  import FileSinkMetaBean._
 
   def path: Option[String] = client.get[String](FPath)
 
@@ -271,8 +289,8 @@ case class FileByteString(byteString: ByteString, path: Option[String] = None, e
 
 case class WriteStatus(fileChannel: FileChannel, var lastPosition: Long)
 
-class FileSink(path: Option[String], openOptions: Set[StandardOpenOption], offset: Long = -1)
-  extends CommonSink[NotUsed, Message[FileByteString], Message[FileByteString]]("FileSink") with Logging {
+class FileSink(name: String = "FileSink", path: Option[String], openOptions: Set[StandardOpenOption], offset: Long = -1)
+  extends CommonSink[NotUsed, Message[FileByteString], Message[FileByteString]](name, identity) with Logging {
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.IODispatcher
 
   val fileChannels: mutable.HashMap[String, WriteStatus] = mutable.HashMap[String, WriteStatus]()

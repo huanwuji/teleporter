@@ -40,6 +40,7 @@ object Hdfs {
     val bind = Option(sourceConfig.addressBind).getOrElse(sourceKey)
     val addressKey = sourceContext.address().key
     val source = Source.fromGraph(new HdfsSource(
+      name = sourceKey,
       path = sourceConfig.path,
       offset = sourceConfig.offset,
       len = sourceConfig.len,
@@ -64,6 +65,7 @@ object Hdfs {
     val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     val hdfsFlow = Flow.fromGraph(new HdfsSink(
+      name = sinkKey,
       path = sinkConfig.path,
       overwrite = sinkConfig.overwrite,
       _create = () ⇒ {
@@ -133,7 +135,6 @@ object HdfsSourceMetaBean {
 class HdfsSourceMetaBean(override val underlying: JdbcMessage) extends SourceMetaBean(underlying) {
 
   import HdfsSourceMetaBean._
-  import SourceMetaBean._
 
   def path: String = client[String](FPath)
 
@@ -167,11 +168,12 @@ class HdfsSinkMetaBean(override val underlying: JdbcMessage) extends SinkMetaBea
   def overwrite: Boolean = client.get[Boolean](FOverwrite).getOrElse(true)
 }
 
-class HdfsSource(path: String,
+class HdfsSource(name: String = "HdfsReader",
+                 path: String,
                  offset: Long, len: Long = Long.MaxValue, bufferSize: Int,
                  _create: () ⇒ FileSystem,
                  _close: FileSystem ⇒ Unit)
-  extends CommonSource[FileSystem, ByteString]("HdfsReader") {
+  extends CommonSource[FileSystem, ByteString](name) {
   override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.CacheDispatcher
 
   val buf = new Array[Byte](bufferSize)
@@ -205,12 +207,12 @@ case class HdfsByteString(byteString: ByteString, path: Option[String] = None, e
   def isEnd: Boolean = end == total
 }
 
-class HdfsSink(
-                path: Option[String],
-                overwrite: Boolean,
-                _create: () ⇒ FileSystem,
-                _close: FileSystem ⇒ Unit)
-  extends CommonSink[FileSystem, Message[HdfsByteString], Message[HdfsByteString]]("HdfsWriter") with Logging {
+class HdfsSink(name: String = "HdfsWriter",
+               path: Option[String],
+               overwrite: Boolean,
+               _create: () ⇒ FileSystem,
+               _close: FileSystem ⇒ Unit)
+  extends CommonSink[FileSystem, Message[HdfsByteString], Message[HdfsByteString]](name, identity) with Logging {
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.CacheDispatcher
   val outputStreams: mutable.HashMap[String, OutputStream] = mutable.HashMap[String, OutputStream]()
 
@@ -240,17 +242,12 @@ class HdfsSink(
   }
 }
 
-object HdfsMetaBean {
+class HdfsMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
   val FHosts = "hosts"
   val FUri = "uri"
   val FCoreSite = "core-site.xml"
   val FHdfsSite = "hdfs-site.xml"
   val FSSLClient = "ssl-client.xml"
-}
-
-class HdfsMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import HdfsMetaBean._
 
   def hosts: Option[String] = client.get[String](FHosts)
 

@@ -42,6 +42,7 @@ object ElasticSearch2 {
     val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new ElasticSearch2Sink(
+      name = sinkKey,
       parallelism = sinkConfig.parallelism,
       _create = () ⇒ Future {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
@@ -60,6 +61,7 @@ object ElasticSearch2 {
     val bind = Option(sinkConfig.addressBind).getOrElse(sinkKey)
     val addressKey = sinkContext.address().key
     Flow.fromGraph(new ElasticSearch2BulkSink(
+      name = sinkKey,
       parallelism = sinkConfig.parallelism,
       _create = ec ⇒ Future {
         center.context.register(addressKey, bind, () ⇒ address(addressKey)).client
@@ -84,35 +86,26 @@ object ElasticSearch2 {
   }
 }
 
-object ElasticAddressMetaBean {
+class ElasticAddressMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
   val FHosts = "hosts"
   val FSettings = "settings"
-}
-
-class ElasticAddressMetaBean(override val underlying: Map[String, Any]) extends AddressMetaBean(underlying) {
-
-  import ElasticAddressMetaBean._
 
   def settings: MapBean = client[MapBean](FSettings)
 
   def hosts: String = client[String](FHosts)
 }
 
-object ElasticSearch2SinkMetaBean {
-  val FParallelism = "parallelism"
-}
-
 class ElasticSearch2SinkMetaBean(override val underlying: Map[String, Any]) extends SinkMetaBean(underlying) {
-
-  import ElasticSearch2SinkMetaBean._
+  val FParallelism = "parallelism"
 
   def parallelism: Int = client.get[Int](FParallelism).getOrElse(1)
 }
 
-class ElasticSearch2Sink(parallelism: Int,
+class ElasticSearch2Sink(name: String = "elasticsearch2.sink",
+                         parallelism: Int,
                          _create: () ⇒ Future[TransportClient],
                          _close: TransportClient ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[TransportClient, Message[ElasticRecord], Message[ElasticRecord]]("kafka.sink", parallelism) {
+  extends CommonSinkAsyncUnordered[TransportClient, Message[ElasticRecord], Message[ElasticRecord]](name, parallelism, identity) {
 
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 
@@ -158,10 +151,11 @@ class ElasticSearch2Sink(parallelism: Int,
   override def close(client: TransportClient, executionContext: ExecutionContext): Future[Done] = _close(client)
 }
 
-class ElasticSearch2BulkSink(parallelism: Int,
+class ElasticSearch2BulkSink(name: String = "elasticsearch2.sink",
+                             parallelism: Int,
                              _create: (ExecutionContext) ⇒ Future[TransportClient],
                              _close: (TransportClient, ExecutionContext) ⇒ Future[Done])
-  extends CommonSinkAsyncUnordered[TransportClient, Seq[Message[ElasticRecord]], Seq[Message[ElasticRecord]]]("kafka.sink", parallelism) {
+  extends CommonSinkAsyncUnordered[TransportClient, Seq[Message[ElasticRecord]], Seq[Message[ElasticRecord]]](name, parallelism, identity) {
 
   override val initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
 

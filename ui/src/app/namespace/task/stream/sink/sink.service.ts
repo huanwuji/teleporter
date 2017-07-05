@@ -130,7 +130,9 @@ export class SinkService extends ConfigService<Sink> {
   }
 
   private getKafkaItems(): FormItemBase<any>[] {
-    return [];
+    return [
+      new TextboxFormItem({key: 'parallelism', label: 'parallelism', type: 'number', required: true, value: 150})
+    ];
   }
 
   private getElasticserach(): FormItemBase<any>[] {
@@ -141,7 +143,7 @@ export class SinkService extends ConfigService<Sink> {
 
   private getKuduItems(): FormItemBase<any>[] {
     return [
-      new TextboxFormItem({key: 'parallelism', label: 'parallelism', type: 'number', required: true, value: 1}),
+      new TextboxFormItem({key: 'parallelism', label: 'parallelism', type: 'number', required: true, value: 150}),
       new TextboxFormItem({
         key: 'autoFit',
         label: 'autoFit',

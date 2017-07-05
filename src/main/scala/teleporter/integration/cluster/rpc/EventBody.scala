@@ -9,11 +9,15 @@ import teleporter.integration.cluster.broker.PersistentProtocol.KeyValue
   * Created by huanwuji 
   * date 2017/1/12.
   */
-trait EventBody
+trait EventBody {
+  def toArray: Array[Byte]
+}
 
 object EventBody {
 
-  case class ConfigChangeNotify(key: String, action: Byte, timestamp: Long) extends EventBody
+  case class ConfigChangeNotify(key: String, action: Byte, timestamp: Long) extends EventBody {
+    override def toArray: Array[Byte] = ConfigChangeNotify.toArray(this)
+  }
 
   object ConfigChangeNotify {
     def apply(bytes: Array[Byte]): ConfigChangeNotify = {
@@ -35,7 +39,9 @@ object EventBody {
     }
   }
 
-  case class HealthResponse(totalMemory: Float, freeMemory: Float) extends EventBody
+  case class HealthResponse(totalMemory: Float, freeMemory: Float) extends EventBody {
+    override def toArray: Array[Byte] = HealthResponse.toArray(this)
+  }
 
   object HealthResponse {
     def apply(bytes: Array[Byte]): HealthResponse = {
@@ -56,7 +62,9 @@ object EventBody {
     }
   }
 
-  case class LogTailResponse(line: String) extends EventBody
+  case class LogTailResponse(line: String) extends EventBody {
+    override def toArray: Array[Byte] = LogTailResponse.toArray(this)
+  }
 
   object LogTailResponse {
     def apply(bytes: Array[Byte]): LogTailResponse = {
@@ -74,7 +82,9 @@ object EventBody {
     }
   }
 
-  case class LogTailRequest(request: Int, cmd: String) extends EventBody
+  case class LogTailRequest(request: Int, cmd: String) extends EventBody {
+    override def toArray: Array[Byte] = LogTailRequest.toArray(this)
+  }
 
   object LogTailRequest {
     def apply(bytes: Array[Byte]): LogTailRequest = {
@@ -95,7 +105,9 @@ object EventBody {
     }
   }
 
-  case class Partition(key: String, bootKeys: Array[String]) extends EventBody
+  case class Partition(key: String, bootKeys: Array[String]) extends EventBody {
+    override def toArray: Array[Byte] = Partition.toArray(this)
+  }
 
   object Partition {
     def apply(bytes: Array[Byte]): Partition = {
@@ -117,7 +129,9 @@ object EventBody {
     }
   }
 
-  case class LinkAddress(address: String, instance: String, keys: Array[String], timestamp: Long) extends EventBody
+  case class LinkAddress(address: String, instance: String, keys: Array[String], timestamp: Long) extends EventBody {
+    override def toArray: Array[Byte] = LinkAddress.toArray(this)
+  }
 
   object LinkAddress {
     def apply(bytes: Array[Byte]): LinkAddress = {
@@ -141,7 +155,9 @@ object EventBody {
     }
   }
 
-  case class LinkVariable(variableKey: String, instance: String, keys: Array[String], timestamp: Long) extends EventBody
+  case class LinkVariable(variableKey: String, instance: String, keys: Array[String], timestamp: Long) extends EventBody {
+    override def toArray: Array[Byte] = LinkVariable.toArray(this)
+  }
 
   object LinkVariable {
     def apply(bytes: Array[Byte]): LinkVariable = {
@@ -165,7 +181,9 @@ object EventBody {
     }
   }
 
-  case class LinkInstance(instance: String, broker: String, ip: String, port: Int, timestamp: Long) extends EventBody
+  case class LinkInstance(instance: String, broker: String, ip: String, port: Int, timestamp: Long) extends EventBody {
+    override def toArray: Array[Byte] = LinkInstance.toArray(this)
+  }
 
   object LinkInstance {
     def apply(bytes: Array[Byte]): LinkInstance = {
@@ -194,7 +212,9 @@ object EventBody {
     }
   }
 
-  case class TaskState(task: String, broker: String, timestamp: Long) extends EventBody
+  case class TaskState(task: String, broker: String, timestamp: Long) extends EventBody {
+    override def toArray: Array[Byte] = TaskState.toArray(this)
+  }
 
   object TaskState {
     def apply(bytes: Array[Byte]): TaskState = {
@@ -219,7 +239,9 @@ object EventBody {
     }
   }
 
-  case class BrokerState(broker: String, task: String, timestamp: Long) extends EventBody
+  case class BrokerState(broker: String, task: String, timestamp: Long) extends EventBody {
+    override def toArray: Array[Byte] = BrokerState.toArray(this)
+  }
 
   object BrokerState {
     def apply(bytes: Array[Byte]): BrokerState = {
@@ -244,7 +266,9 @@ object EventBody {
     }
   }
 
-  case class InstanceState(instance: String, broker: String, ip: String, port: Int, partitions: Array[String], timestamp: Long) extends EventBody
+  case class InstanceState(instance: String, broker: String, ip: String, port: Int, partitions: Array[String], timestamp: Long) extends EventBody {
+    override def toArray: Array[Byte] = InstanceState.toArray(this)
+  }
 
   object InstanceState {
     def apply(bytes: Array[Byte]): InstanceState = {
@@ -276,7 +300,9 @@ object EventBody {
     }
   }
 
-  case class KVGet(key: String) extends EventBody
+  case class KVGet(key: String) extends EventBody {
+    override def toArray: Array[Byte] = KVGet.toArray(this)
+  }
 
   object KVGet {
     def apply(bytes: Array[Byte]): KVGet = {
@@ -292,7 +318,9 @@ object EventBody {
     }
   }
 
-  case class KVRemove(key: String) extends EventBody
+  case class KVRemove(key: String) extends EventBody {
+    override def toArray: Array[Byte] = KVRemove.toArray(this)
+  }
 
   object KVRemove {
     def apply(bytes: Array[Byte]): KVRemove = {
@@ -308,7 +336,9 @@ object EventBody {
     }
   }
 
-  case class RangeRegexKV(key: String, start: Int, limit: Int) extends EventBody
+  case class RangeRegexKV(key: String, start: Int, limit: Int) extends EventBody {
+    override def toArray: Array[Byte] = RangeRegexKV.toArray(this)
+  }
 
   object RangeRegexKV {
     def apply(bytes: Array[Byte]): RangeRegexKV = {
@@ -326,6 +356,8 @@ object EventBody {
 
   case class KV(key: String, value: String) extends EventBody {
     def keyValue = KeyValue(key, value)
+
+    override def toArray: Array[Byte] = KV.toArray(this)
   }
 
   object KV {
@@ -350,7 +382,9 @@ object EventBody {
     }
   }
 
-  case class AtomicKV(key: String, expect: String, update: String) extends EventBody
+  case class AtomicKV(key: String, expect: String, update: String) extends EventBody {
+    override def toArray: Array[Byte] = AtomicKV.toArray(this)
+  }
 
   object AtomicKV {
     def apply(bytes: Array[Byte]): AtomicKV = {
@@ -370,7 +404,9 @@ object EventBody {
     }
   }
 
-  case class KVS(kvs: Seq[KV]) extends EventBody
+  case class KVS(kvs: Seq[KV]) extends EventBody {
+    override def toArray: Array[Byte] = KVS.toArray(this)
+  }
 
   object KVS {
     def apply(bytes: Array[Byte]): KVS = {
@@ -387,14 +423,16 @@ object EventBody {
     }
   }
 
-  class Empty extends EventBody
+  class Empty extends EventBody {
+    override def toArray: Array[Byte] = Empty.toArray
+  }
 
   object Empty {
     val empty = new Empty
 
     def apply(bytes: Array[Byte]): Empty = empty
 
-    def toArray(body: Empty): Array[Byte] = Array.emptyByteArray
+    def toArray: Array[Byte] = Array.emptyByteArray
   }
 
 }

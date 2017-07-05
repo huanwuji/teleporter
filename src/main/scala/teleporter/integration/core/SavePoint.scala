@@ -3,11 +3,11 @@ package teleporter.integration.core
 import kafka.common.TopicAndPartition
 import kafka.javaapi.consumer.ZkKafkaConsumerConnector
 import org.apache.logging.log4j.scala.Logging
-import teleporter.integration.cluster.instance.Brokers.SendMessage
-import teleporter.integration.cluster.rpc.fbs.{EventStatus, EventType}
-import teleporter.integration.cluster.rpc.{EventBody, TeleporterEvent}
+import teleporter.integration.cluster.rpc.EventBody
+import teleporter.integration.cluster.rpc.fbs.{MessageStatus, MessageType}
 import teleporter.integration.component.Kafka.KafkaLocation
-import teleporter.integration.utils.{Jackson, MapBean}
+import teleporter.integration.core.TeleporterContext.Update
+import teleporter.integration.utils.{Jackson, MapBean, MapMetaBean}
 
 import scala.concurrent.Future
 
@@ -36,22 +36,24 @@ class EmptySavePoint[T] extends SavePoint[T] {
 }
 
 trait RecoverStreamStatus extends Logging {
-  def recoverStream(key: String)(implicit center: TeleporterCenter): Option[Future[Boolean]] = {
+  def recoverStream(key: String)(implicit center: TeleporterCenter): Future[Option[Boolean]] = {
     import center.system.dispatcher
     val context = center.context.getContext[StreamContext](key)
-    val streamMetaBean = context.config.mapTo[StreamMetaBean]
+    val streamMetaBean = context.config
     if (StreamStatus.FAILURE eq streamMetaBean.status) {
       logger.info(s"Will recover $key status to Normal")
-      val result = center.eventListener.asyncEvent { seqNr ⇒
-        center.brokers ! SendMessage(
-          TeleporterEvent.request(seqNr = seqNr, eventType = EventType.AtomicSaveKV,
-            body = EventBody.AtomicKV(key = key,
-              expect = Jackson.mapper.writeValueAsString(streamMetaBean.toMap),
-              update = Jackson.mapper.writeValueAsString(streamMetaBean.status(StreamStatus.NORMAL))))
-        )
-      }._2.map(_.status == EventStatus.Success)
-      Some(result)
-    } else None
+      val targetStreamConfig = streamMetaBean.status(StreamStatus.NORMAL)
+      center.brokerConnection.future.flatMap(_.handler.request(MessageType.AtomicSaveKV,
+        EventBody.AtomicKV(key = key,
+          expect = Jackson.mapper.writeValueAsString(streamMetaBean.toMap),
+          update = Jackson.mapper.writeValueAsString(targetStreamConfig)).toArray)(center.eventListener)
+      ).map { m ⇒
+        if (m.status == MessageStatus.Success) {
+          center.context.ref ! Update(context.copy(config = MapMetaBean[StreamMetaBean](targetStreamConfig)))
+        }
+        Some(m.status == MessageStatus.Success)
+      }
+    } else Future.successful(None)
   }
 }
 
@@ -62,25 +64,17 @@ class SourceSavePointImpl()(implicit center: TeleporterCenter)
 
   override def save(key: String, point: MapBean): Future[Boolean] = {
     val context = center.context.getContext[SourceContext](key)
-    val streamSaveResult = recoverStream(context.stream().key)
-
-    def saveSource(): Future[Boolean] = {
-      center.eventListener.asyncEvent { seqNr ⇒
-        center.brokers ! SendMessage(
-          TeleporterEvent.request(seqNr = seqNr, eventType = EventType.AtomicSaveKV,
-            body = EventBody.AtomicKV(key = key,
-              expect = Jackson.mapper.writeValueAsString(context.config.toMap),
-              update = Jackson.mapper.writeValueAsString(point.toMap)))
-        )
-      }._2.map(_.status == EventStatus.Success)
+    recoverStream(context.stream().key).flatMap { r ⇒
+      if (r.exists(!_)) {
+        Future.successful(false)
+      } else {
+        center.brokerConnection.future.flatMap(_.handler.request(MessageType.AtomicSaveKV,
+          EventBody.AtomicKV(key = key,
+            expect = Jackson.mapper.writeValueAsString(context.config.toMap),
+            update = Jackson.mapper.writeValueAsString(point.toMap)).toArray)(center.eventListener)
+        ).map(_.status == MessageStatus.Success)
+      }
     }
-
-    streamSaveResult.map {
-      fu ⇒
-        fu.flatMap {
-          streamResult ⇒ if (streamResult) saveSource() else Future.successful(false)
-        }
-    }.getOrElse(saveSource())
   }
 
   override def complete(key: String, point: MapBean): Future[Boolean] = {
@@ -100,21 +94,16 @@ class KafkaSavePoint(consumerConnector: ZkKafkaConsumerConnector)(implicit cente
 
   override def save(key: String, point: KafkaLocation): Future[Boolean] = {
     val context = center.context.getContext[SourceContext](key)
-    val streamSaveResult = recoverStream(context.stream().key)
-
-    def saveSource(): Future[Boolean] = {
-      val topicPartition = point.topicPartition
-      consumerConnector.commitOffsets(TopicAndPartition(topicPartition.topic, topicPartition.partition), point.offset)
-      logger.info(s"$key commit kafka offset: $point")
-      Future.successful(true)
+    recoverStream(context.stream().key).flatMap { r ⇒
+      if (r.exists(!_)) {
+        Future.successful(false)
+      } else {
+        val topicPartition = point.topicPartition
+        consumerConnector.commitOffsets(TopicAndPartition(topicPartition.topic, topicPartition.partition), point.offset)
+        logger.info(s"$key commit kafka offset: $point")
+        Future.successful(true)
+      }
     }
-
-    streamSaveResult.map {
-      fu ⇒
-        fu.flatMap {
-          streamResult ⇒ if (streamResult) saveSource() else Future.successful(false)
-        }
-    }.getOrElse(saveSource())
   }
 
   override def complete(key: String, point: KafkaLocation): Future[Boolean] = {

@@ -23,7 +23,8 @@ import scala.util.control.NonFatal
   * Created by huanwuji
   * date 2017/1/4.
   */
-class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
+class CommonSourceGraphStageLogic[C, Out](name: String,
+                                          shape: SourceShape[Out],
                                           create: () ⇒ C,
                                           readData: (C) ⇒ Option[Out],
                                           close: (C) ⇒ Unit,
@@ -37,7 +38,7 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
     try {
       client = create()
     } catch {
-      case NonFatal(ex) ⇒ teleporterFailure(ex)
+      case NonFatal(ex) ⇒ teleporterFailure(name, ex)
     }
   }
 
@@ -47,7 +48,7 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
       pushData()
       retries = 0
     } catch {
-      case NonFatal(ex) ⇒ teleporterFailure(ex)
+      case NonFatal(ex) ⇒ teleporterFailure(name, ex)
     }
   }
 
@@ -82,8 +83,8 @@ class CommonSourceGraphStageLogic[C, Out](shape: SourceShape[Out],
 
   override def supervisionStrategy: TeleporterAttributes.SupervisionStrategy = inheritedAttributes.get[TeleporterAttributes.SupervisionStrategy].getOrElse(TeleporterAttributes.emptySupervisionStrategy)
 
-  override def teleporterFailure(ex: Throwable): Unit = {
-    super.teleporterFailure(ex)
+  override def teleporterFailure(name: String, ex: Throwable): Unit = {
+    super.teleporterFailure(name, ex)
     matchRule(ex) match {
       case Some(rule) ⇒
         if (rule.directive.retries == -1 || retries < rule.directive.retries) {
@@ -135,7 +136,7 @@ abstract class CommonSource[C, Out](name: String) extends GraphStage[SourceShape
 
   @scala.throws[Exception](classOf[Exception])
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
-    new CommonSourceGraphStageLogic(shape, create, readData, close, inheritedAttributes)
+    new CommonSourceGraphStageLogic(name, shape, create, readData, close, inheritedAttributes)
 }
 
 object SourceRoller {
@@ -374,7 +375,7 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
 
   @scala.throws[Exception](classOf[Exception])
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
-    new CommonSourceGraphStageLogic(shape, create, readData, close, inheritedAttributes) {
+    new CommonSourceGraphStageLogic(name, shape, create, readData, close, inheritedAttributes) {
       @scala.throws[Exception](classOf[Exception])
       override protected def onTimer(timerKey: Any): Unit = {
         timerKey match {
@@ -397,7 +398,8 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
     }
 }
 
-class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
+class CommonSourceAsyncGraphStageLogic[T, S](name: String,
+                                             shape: SourceShape[T],
                                              create: ExecutionContext ⇒ Future[S],
                                              readData: (S, ExecutionContext) ⇒ Future[Option[T]],
                                              close: (S, ExecutionContext) ⇒ Future[Done],
@@ -428,12 +430,12 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
       case scala.util.Success(res) ⇒
         resource.success(res)
         if (withPull) onPull()
-      case scala.util.Failure(t) ⇒ teleporterFailure(t)
+      case scala.util.Failure(t) ⇒ teleporterFailure(name, t)
     }
     try {
       create(executeContext).onComplete(cb.invoke)
     } catch {
-      case NonFatal(ex) ⇒ teleporterFailure(ex)
+      case NonFatal(ex) ⇒ teleporterFailure(name, ex)
     }
   }
 
@@ -446,7 +448,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
       case Some(d) ⇒ push(shape.out, d)
       case None ⇒ closeStage()
     }
-    case scala.util.Failure(ex) ⇒ teleporterFailure(ex)
+    case scala.util.Failure(ex) ⇒ teleporterFailure(name, ex)
   }.invoke _
 
   final override def onPull(): Unit = onResourceReady {
@@ -454,7 +456,7 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
       try {
         readData(_resource, executeContext).onComplete(callback)
       } catch {
-        case e: Throwable ⇒ teleporterFailure(e)
+        case e: Throwable ⇒ teleporterFailure(name, e)
       }
   }
 
@@ -491,8 +493,8 @@ class CommonSourceAsyncGraphStageLogic[T, S](shape: SourceShape[T],
     }
   }
 
-  override def teleporterFailure(ex: Throwable): Unit = {
-    super.teleporterFailure(ex)
+  override def teleporterFailure(name: String, ex: Throwable): Unit = {
+    super.teleporterFailure(name, ex)
     ex match {
       case NonFatal(_) ⇒
         matchRule(ex) match {
@@ -535,7 +537,7 @@ abstract class CommonSourceAsync[T, S](name: String) extends GraphStage[SourceSh
 
   def close(client: S, ec: ExecutionContext): Future[Done]
 
-  def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceAsyncGraphStageLogic(shape, create, readData, close, inheritedAttributes)
+  def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceAsyncGraphStageLogic(name, shape, create, readData, close, inheritedAttributes)
 
   override def toString: String = name
 }
@@ -634,7 +636,7 @@ abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContex
   def readData(client: C, rollerContext: RollerContext, executionContext: ExecutionContext): Future[Option[T]]
 
   @scala.throws[Exception](classOf[Exception])
-  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceAsyncGraphStageLogic[T, C](shape, create, readData, close, inheritedAttributes) {
+  override def createLogic(inheritedAttributes: Attributes): GraphStageLogic = new CommonSourceAsyncGraphStageLogic[T, C](name, shape, create, readData, close, inheritedAttributes) {
     @scala.throws[Exception](classOf[Exception])
     override protected def onTimer(timerKey: Any): Unit = {
       timerKey match {
@@ -653,7 +655,7 @@ abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContex
             scheduleOnce('pull, currRollerContext.timeline.get.period.asInstanceOf[FiniteDuration] / 2)
           }
       }
-      case scala.util.Failure(ex) ⇒ teleporterFailure(ex)
+      case scala.util.Failure(ex) ⇒ teleporterFailure(name, ex)
     }.invoke _
   }
 }
