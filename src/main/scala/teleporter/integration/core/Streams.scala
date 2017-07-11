@@ -1,7 +1,7 @@
 package teleporter.integration.core
 
 import java.util.UUID
-import java.util.concurrent.{Callable, TimeUnit}
+import java.util.concurrent.Callable
 
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
@@ -33,7 +33,6 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
 
   private val streamLogicCache = CacheBuilder.newBuilder()
     .maximumSize(100)
-    .expireAfterWrite(5, TimeUnit.MINUTES)
     .build[String, StreamLogic]()
   private val streamStates = TrieMap[String, StreamState]()
   private val cronCache = mutable.Map[Any, UUID]()
@@ -59,7 +58,14 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
           center.crontab ! UnSchedule(jobId)
       }
       logger.info(s"Schedule new job, $command")
-      center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
+      center.crontab ! CronTab.Schedule(self, CronScheduleCommand(command, cron), CronExpression(cron))
+    case CronScheduleCommand(command, _) ⇒
+      command match {
+        case Start(key) ⇒ start(key, allowCron = false)
+        case Stop(key) ⇒ stop(key)
+        case Remove(key) ⇒ stop(key)
+        case Restart(key) ⇒ restart(key)
+      }
     case cronSchedule@CronTab.Scheduled(jobId, _, message) ⇒
       logger.info(s"CronSchedule $cronSchedule was start")
       cronCache += (message → jobId)
@@ -89,10 +95,10 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
     }
   }
 
-  def start(key: String): Unit = {
+  def start(key: String, allowCron: Boolean = true): Unit = {
     center.context.getContextOption[StreamContext](key).foreach { stream ⇒
       stream.config.cronOption match {
-        case Some(cron) if cron.nonEmpty ⇒
+        case Some(cron) if cron.nonEmpty && allowCron ⇒
           self ! CronCommand(Streams.Start(key), cron)
         case _ ⇒
           loadTemplate(key) match {
@@ -108,6 +114,11 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
   }
 
   def stop(key: String): Future[Done] = {
+    cronCache.remove(command).foreach {
+      jobId ⇒
+        logger.info(s"Cancel exists cron job, $command, $jobId")
+        center.crontab ! UnSchedule(jobId)
+    }
     streamStates.get(key) match {
       case Some(state) ⇒
         logger.info(s"Stream $key will shutdown")
@@ -185,6 +196,8 @@ object Streams {
   case class DelayCommand(command: StreamCommand, delay: Duration = Duration.Zero)
 
   case class CronCommand(command: StreamCommand, cron: String)
+
+  case class CronScheduleCommand(command: StreamCommand, cron: String)
 
   def apply()(implicit center: TeleporterCenter): ActorRef = {
     center.system.actorOf(Props(classOf[StreamsActor], center))
