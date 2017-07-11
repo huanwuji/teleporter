@@ -57,8 +57,8 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
         jobId ⇒
           logger.info(s"Cancel exists cron job, $command, $jobId")
           center.crontab ! UnSchedule(jobId)
-          center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
       }
+      logger.info(s"Schedule new job, $command")
       center.crontab ! CronTab.Schedule(self, command, CronExpression(cron))
     case cronSchedule@CronTab.Scheduled(jobId, _, message) ⇒
       logger.info(s"CronSchedule $cronSchedule was start")
