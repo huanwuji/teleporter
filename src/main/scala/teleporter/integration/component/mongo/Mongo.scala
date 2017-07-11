@@ -83,15 +83,23 @@ class MongoSourceAsync(name: String = "mongo.source",
                        _close: (MongoCollection[MongoMessage], ExecutionContext) ⇒ Future[Done])
   extends RollerSourceAsync[SourceMessage[RollerContext, Seq[MongoMessage]], MongoCollection[MongoMessage]](name, rollerContext) {
 
+  var isCurrConditionExec: Boolean = false
+
   override def readData(client: MongoCollection[MongoMessage], rollerContext: RollerContext,
                         executionContext: ExecutionContext): Future[Option[SourceMessage[RollerContext, Seq[MongoMessage]]]] = {
     implicit val ec = executionContext
-    val filterDoc = filter.map(s ⇒ Document(Template(s, rollerContext.toMap))).getOrElse(Document())
-    val query = client.find(filterDoc)
-    val filterQuery = rollerContext.pagination.map { page ⇒
-      query.skip(page.offset.toInt).limit(page.pageSize)
-    }.getOrElse(query)
-    filterQuery.toFuture().map(m ⇒ Some(SourceMessage(rollerContext, m)))
+    if (isCurrConditionExec) {
+      isCurrConditionExec = false
+      Future.successful(None)
+    } else {
+      isCurrConditionExec = true
+      val filterDoc = filter.map(s ⇒ Document(Template(s, rollerContext.toMap))).getOrElse(Document())
+      val query = client.find(filterDoc)
+      val filterQuery = rollerContext.pagination.map { page ⇒
+        query.skip(page.offset.toInt).limit(page.pageSize)
+      }.getOrElse(query)
+      filterQuery.toFuture().map(m ⇒ Some(SourceMessage(rollerContext, m)))
+    }
   }
 
   override def create(executionContext: ExecutionContext): Future[MongoCollection[MongoMessage]] = _create(executionContext)
