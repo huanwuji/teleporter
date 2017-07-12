@@ -10,6 +10,7 @@ import akka.stream.{ActorMaterializer, Attributes, TeleporterAttributes}
 import teleporter.integration.component.SourceRoller._
 import teleporter.integration.component.jdbc.SqlSupport
 import teleporter.integration.supervision.DecideRule
+import teleporter.integration.utils.{Dates, MapBean}
 
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
@@ -37,15 +38,20 @@ class TestCommonSource extends CommonSource[Int, Int]("CommonSource") {
   }
 }
 
-class TestCommonRollerSource(rollerContext: RollerContext)
+class TestCommonRollerSource(rollerContext: RollerContext, data: Array[Option[Int]])
   extends RollerSource[Int, Int]("test.common.source", rollerContext) with SqlSupport {
 
-  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
+  //  override protected def initialAttributes: Attributes = super.initialAttributes and TeleporterAttributes.BlockingDispatcher
+  var i = -1
 
   override def readData(client: Int, rollerContext: RollerContext): Option[Int] = {
     println(rollerContext, rollerContext.timeline.map(_.deadline()).getOrElse(""))
-    LockSupport.parkNanos(1e8.toLong)
-    Some(Random.nextInt())
+    i += 1
+    if (i < data.length) {
+      data(i)
+    } else {
+      None
+    }
   }
 
   override def create(): Int = {
@@ -76,14 +82,19 @@ class TestSourceAsync extends CommonSourceAsync[Int, Int]("TestSourceAsync") wit
   }
 }
 
-class TestRollerSourceAsync(rollerContext: RollerContext)
+class TestRollerSourceAsync(rollerContext: RollerContext, data: Array[Option[Int]])
   extends RollerSourceAsync[Int, Int]("TestRollerSourceAsync", rollerContext) {
+  var i = -1
 
   override def readData(client: Int, rollerContext: RollerContext, executionContext: ExecutionContext): Future[Option[Int]] = {
     implicit val ec = executionContext
     println(rollerContext, rollerContext.timeline.map(_.deadline()).getOrElse(""))
-    LockSupport.parkNanos(1e8.toLong)
-    Future.successful(Some(Random.nextInt()))
+    i += 1
+    if (i < data.length) {
+      Future.successful(data(i))
+    } else {
+      Future.successful(None)
+    }
   }
 
   override def create(executionContext: ExecutionContext): Future[Int] = {
@@ -101,7 +112,10 @@ object CommonSourceTest extends App {
   implicit val system = ActorSystem()
   implicit val mater = ActorMaterializer()
 
-  testCommonRollerSource()
+  import SourceRollerMetaBean._
+
+  //  testCommonRollerSource()
+  testRollerSourceAsync()
 
   def testCommonSource()(implicit system: ActorSystem, mater: ActorMaterializer): Unit = {
     Source.fromGraph(new TestCommonSource)
@@ -120,22 +134,21 @@ object CommonSourceTest extends App {
   def testCommonRollerSource()(implicit system: ActorSystem, mater: ActorMaterializer): Unit = {
     val now = LocalDateTime.now()
     val rollerContext = RollerContext(
-      pagination =
-        //        None,
-        Some(Pagination(1, 10, 2)),
-      timeline =
-        //        None,
-        Some(Timeline(
-          start = LocalDateTime.now().minusSeconds(75),
-          end = null,
-          period = 10.seconds,
-          maxPeriod = 20.seconds,
-          deadline = () ⇒ now
-        )),
-      forever = false,
-      state = SourceRoller.Paging
+      MapBean(Map(FRoller → Map(
+        FPage → 1,
+        FPageSize → 1,
+        FMaxPage → 3,
+        FStart → LocalDateTime.now().minusSeconds(10).format(Dates.DEFAULT_DATE_FORMATTER),
+        FPeriod → "1.second",
+        FMaxPeriod → "2.seconds",
+        FDeadline → "now"
+      )))
     )
-    Source.fromGraph(new TestCommonRollerSource(rollerContext.nextTimeline().copy(state = Paging)))
+
+    Source.fromGraph(new TestCommonRollerSource(
+      rollerContext,
+      Array(Some(1), None, Some(2), None, Some(3), Some(4), None, None, Some(5), Some(6))
+    ))
       .addAttributes(Attributes(TeleporterAttributes
         .SupervisionStrategy(Seq(DecideRule(".*", "INFO", "reload(delay=5000.millis, retries=5, next=stop)")))))
       .to(Sink.foreach(println)).run()
@@ -144,22 +157,19 @@ object CommonSourceTest extends App {
   def testRollerSourceAsync()(implicit system: ActorSystem, mater: ActorMaterializer): Unit = {
     val now = LocalDateTime.now()
     val rollerContext = RollerContext(
-      pagination =
-        None,
-      //      Some(Pagination(1, 10, 2)),
-      timeline =
-        //        None,
-        Some(Timeline(
-          start = LocalDateTime.now().minusSeconds(75),
-          end = null,
-          period = 10.seconds,
-          maxPeriod = 20.seconds,
-          deadline = () ⇒ LocalDateTime.now()
-        )),
-      forever = true,
-      state = SourceRoller.Timing
+      MapBean(Map(FRoller → Map(
+        FPage → 1,
+        FPageSize → 1,
+        FMaxPage → 3,
+        FStart → LocalDateTime.now().minusSeconds(10).format(Dates.DEFAULT_DATE_FORMATTER),
+        FPeriod → "1.second",
+        FMaxPeriod → "2.seconds",
+        FDeadline → "now"
+      )))
     )
-    Source.fromGraph(new TestRollerSourceAsync(rollerContext.nextTimeline().copy(state = SourceRoller.Timing)))
+    Source.fromGraph(new TestRollerSourceAsync(rollerContext,
+      Array(Some(1), None, Some(2), None, Some(3), Some(4), None, None, Some(5), Some(6))
+    ))
       .addAttributes(Attributes(TeleporterAttributes
         .SupervisionStrategy(Seq(DecideRule(".*", "INFO", "reload(delay=5000.millis, retries=5, next=stop)")))))
       .to(Sink.foreach(println)).run()

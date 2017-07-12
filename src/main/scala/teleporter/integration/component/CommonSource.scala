@@ -149,7 +149,7 @@ object SourceRoller {
 
   case object Timing extends State
 
-  case class Pagination(page: Int, pageSize: Int, maxPage: Int) {
+  case class Pagination(page: Int, pageSize: Int, maxPage: Int, var num: Int = 0) {
     def offset: Long = page * pageSize
   }
 
@@ -174,12 +174,12 @@ object SourceRoller {
 
     import SourceRollerMetaBean._
 
-    def canPaging: Boolean = pagination.exists(p ⇒ p.page <= p.maxPage)
+    def hasNextPage: Boolean = pagination.exists(p ⇒ p.num >= p.pageSize && p.page + 1 <= p.maxPage)
 
     def nextPage(): RollerContext = {
       require(this.pagination.isDefined, "Pagination must support before call")
       val pagination = this.pagination.get
-      val nextPagination = pagination.copy(page = pagination.page + 1)
+      val nextPagination = pagination.copy(page = pagination.page + 1, num = 0)
       this.copy(pagination = Some(nextPagination), state = Paging)
     }
 
@@ -192,7 +192,7 @@ object SourceRoller {
     def firstPage(): RollerContext = {
       require(this.pagination.isDefined, "Pagination must support before call")
       val pagination = this.pagination.get
-      val firstPagination = pagination.copy(page = 1)
+      val firstPagination = pagination.copy(page = 1, num = 0)
       this.copy(pagination = Some(firstPagination), state = Paging)
     }
 
@@ -210,9 +210,9 @@ object SourceRoller {
       this.copy(timeline = Some(nextTimeline), state = Timing)
     }
 
-    def checkStartTimeOver: Boolean = !this.forever && timeline.exists(t ⇒ t.deadline().isEqual(t.start))
+    def isTimeOver: Boolean = !this.forever && timeline.exists(t ⇒ t.deadline().isEqual(t.start))
 
-    def checkStartTimeNear: Boolean = {
+    def isTimeNear: Boolean = {
       this.forever && this.timeline.exists(t ⇒ java.time.Duration.between(t.end, t.deadline()).toNanos < t.period.toNanos)
     }
 
@@ -276,14 +276,21 @@ object SourceRoller {
     }
   }
 
+  sealed trait ActionState
+
+  case object Continue extends ActionState
+
+  case object Switch extends ActionState
+
 }
 
 abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) extends CommonSource[C, Out](name) {
 
   import SourceRoller._
 
+  var actionState: ActionState = Continue
+
   var currRollerContext: RollerContext = rollerContext
-  var nextContinued = true
 
   override def readData(client: C): Option[Out] = {
     if (currRollerContext.forever) {
@@ -295,40 +302,54 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
 
   @tailrec
   final def foreverReadData(client: C): Option[Out] = {
-    val data = if (currRollerContext.checkStartTimeNear) {
-      return None
-    } else {
-      readData(client, currRollerContext)
-    }
+    val data = readData(client, currRollerContext)
     data match {
       case None ⇒
         currRollerContext.state match {
           case Normal ⇒ None
           case Paging ⇒
-            currRollerContext = currRollerContext.nextTimeline()
-            currRollerContext = currRollerContext.firstPage()
-            if (currRollerContext.checkStartTimeNear) {
-              None
-            } else {
-              foreverReadData(client)
+            actionState match {
+              case Continue ⇒
+                actionState = Switch
+                if (currRollerContext.onlyPage && !currRollerContext.hasNextPage || currRollerContext.isTimeNear) {
+                  None
+                } else if (currRollerContext.isPageTimeline && !currRollerContext.hasNextPage) {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  foreverReadData(client)
+                } else {
+                  currRollerContext = currRollerContext.nextPage()
+                  foreverReadData(client)
+                }
+              case Switch ⇒
+                if (currRollerContext.onlyPage || currRollerContext.isTimeNear) {
+                  None
+                } else {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  foreverReadData(client)
+                }
             }
           case Timing ⇒
-            currRollerContext = currRollerContext.nextTimeline()
-            if (!currRollerContext.checkStartTimeNear) {
+            if (currRollerContext.isTimeOver) {
+              None
+            } else {
+              currRollerContext = currRollerContext.nextTimeline()
               foreverReadData(client)
-            } else None
+            }
         }
       case Some(_) ⇒
         currRollerContext.state match {
-          case Normal ⇒
+          case Normal ⇒ if (actionState == Switch) actionState = Continue
           case Paging ⇒
-            currRollerContext = currRollerContext.nextPage()
-            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
+            currRollerContext.pagination.foreach(_.num += 1)
+            if (actionState == Switch) {
+              actionState = Continue
             }
           case Timing ⇒
-            currRollerContext = currRollerContext.nextTimeline()
+            if (actionState == Switch) {
+              actionState = Continue
+            }
         }
         data
     }
@@ -336,36 +357,54 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
 
   @tailrec
   final def beOverReadData(client: C): Option[Out] = {
-    val data = if (currRollerContext.checkStartTimeOver || (currRollerContext.onlyPage && !currRollerContext.canPaging)) {
-      return None
-    } else readData(client, currRollerContext)
+    val data = readData(client, currRollerContext)
     data match {
       case None ⇒
         currRollerContext.state match {
           case Normal ⇒ None
           case Paging ⇒
-            if (!currRollerContext.checkStartTimeOver) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
-              beOverReadData(client)
-            } else None
+            actionState match {
+              case Continue ⇒
+                actionState = Switch
+                if (currRollerContext.onlyPage && !currRollerContext.hasNextPage) {
+                  None
+                } else if (currRollerContext.isPageTimeline && !currRollerContext.hasNextPage) {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  beOverReadData(client)
+                } else {
+                  currRollerContext = currRollerContext.nextPage()
+                  beOverReadData(client)
+                }
+              case Switch ⇒
+                if (currRollerContext.onlyPage || currRollerContext.isTimeOver) {
+                  None
+                } else {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  beOverReadData(client)
+                }
+            }
           case Timing ⇒
-            if (!currRollerContext.checkStartTimeOver) {
+            if (currRollerContext.isTimeOver) {
+              None
+            } else {
               currRollerContext = currRollerContext.nextTimeline()
               beOverReadData(client)
-            } else None
+            }
         }
       case Some(_) ⇒
         currRollerContext.state match {
-          case Normal ⇒
+          case Normal ⇒ if (actionState == Switch) actionState = Continue
           case Paging ⇒
-            currRollerContext = currRollerContext.nextPage()
-            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
+            currRollerContext.pagination.foreach(_.num += 1)
+            if (actionState == Switch) {
+              actionState = Continue
             }
           case Timing ⇒
-            currRollerContext = currRollerContext.nextTimeline()
+            if (actionState == Switch) {
+              actionState = Continue
+            }
         }
         data
     }
@@ -548,6 +587,7 @@ abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContex
   import SourceRoller._
 
   var currRollerContext: RollerContext = rollerContext
+  var actionState: ActionState = Continue
 
   override def readData(client: C, executionContext: ExecutionContext): Future[Option[T]] = {
     if (currRollerContext.forever) {
@@ -558,76 +598,108 @@ abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContex
   }
 
   final def foreverReadData(client: C)(implicit executionContext: ExecutionContext): Future[Option[T]] = {
-    val data = if (currRollerContext.checkStartTimeNear) {
-      return Future.successful(None)
-    } else {
-      readData(client, currRollerContext, executionContext)
-    }
+    val data = readData(client, currRollerContext, executionContext)
     data.flatMap {
       case None ⇒
         currRollerContext.state match {
           case Normal ⇒ Future.successful(None)
           case Paging ⇒
-            currRollerContext = currRollerContext.nextTimeline()
-            currRollerContext = currRollerContext.firstPage()
-            if (currRollerContext.checkStartTimeNear) {
-              Future.successful(None)
-            } else {
-              foreverReadData(client)
+            actionState match {
+              case Continue ⇒
+                actionState = Switch
+                if (currRollerContext.onlyPage && !currRollerContext.hasNextPage || currRollerContext.isTimeNear) {
+                  Future.successful(None)
+                } else if (currRollerContext.isPageTimeline && !currRollerContext.hasNextPage) {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  foreverReadData(client)
+                } else {
+                  currRollerContext = currRollerContext.nextPage()
+                  foreverReadData(client)
+                }
+              case Switch ⇒
+                if (currRollerContext.onlyPage || currRollerContext.isTimeNear) {
+                  Future.successful(None)
+                } else {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  foreverReadData(client)
+                }
             }
           case Timing ⇒
-            currRollerContext = currRollerContext.nextTimeline()
-            if (!currRollerContext.checkStartTimeNear) {
+            if (currRollerContext.isTimeOver) {
+              Future.successful(None)
+            } else {
+              currRollerContext = currRollerContext.nextTimeline()
               foreverReadData(client)
-            } else Future.successful(None)
+            }
         }
       case Some(_) ⇒
         currRollerContext.state match {
-          case Normal ⇒
+          case Normal ⇒ if (actionState == Switch) actionState = Continue
           case Paging ⇒
-            currRollerContext = currRollerContext.nextPage()
-            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
+            currRollerContext.pagination.foreach(_.num += 1)
+            if (actionState == Switch) {
+              actionState = Continue
             }
           case Timing ⇒
-            currRollerContext = currRollerContext.nextTimeline()
+            if (actionState == Switch) {
+              actionState = Continue
+            }
         }
         data
     }
   }
 
   final def beOverReadData(client: C)(implicit executionContext: ExecutionContext): Future[Option[T]] = {
-    val data = if (currRollerContext.checkStartTimeOver || (currRollerContext.onlyPage && !currRollerContext.canPaging)) {
-      return Future.successful(None)
-    } else readData(client, currRollerContext, executionContext)
+    val data = readData(client, currRollerContext, executionContext)
     data.flatMap {
       case None ⇒
         currRollerContext.state match {
           case Normal ⇒ Future.successful(None)
           case Paging ⇒
-            if (!currRollerContext.checkStartTimeOver) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
-              beOverReadData(client)
-            } else Future.successful(None)
+            actionState match {
+              case Continue ⇒
+                actionState = Switch
+                if (currRollerContext.onlyPage && !currRollerContext.hasNextPage) {
+                  Future.successful(None)
+                } else if (currRollerContext.isPageTimeline && !currRollerContext.hasNextPage) {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  beOverReadData(client)
+                } else {
+                  currRollerContext = currRollerContext.nextPage()
+                  beOverReadData(client)
+                }
+              case Switch ⇒
+                if (currRollerContext.onlyPage || currRollerContext.isTimeOver) {
+                  Future.successful(None)
+                } else {
+                  currRollerContext = currRollerContext.nextTimeline()
+                  currRollerContext = currRollerContext.firstPage()
+                  beOverReadData(client)
+                }
+            }
           case Timing ⇒
-            if (!currRollerContext.checkStartTimeOver) {
+            if (currRollerContext.isTimeOver) {
+              Future.successful(None)
+            } else {
               currRollerContext = currRollerContext.nextTimeline()
               beOverReadData(client)
-            } else Future.successful(None)
+            }
         }
       case Some(_) ⇒
         currRollerContext.state match {
-          case Normal ⇒
+          case Normal ⇒ if (actionState == Switch) actionState = Continue
           case Paging ⇒
-            currRollerContext = currRollerContext.nextPage()
-            if (currRollerContext.isPageTimeline && !currRollerContext.canPaging) {
-              currRollerContext = currRollerContext.nextTimeline()
-              currRollerContext = currRollerContext.firstPage()
+            currRollerContext.pagination.foreach(_.num += 1)
+            if (actionState == Switch) {
+              actionState = Continue
             }
           case Timing ⇒
-            currRollerContext = currRollerContext.nextTimeline()
+            if (actionState == Switch) {
+              actionState = Continue
+            }
         }
         data
     }
