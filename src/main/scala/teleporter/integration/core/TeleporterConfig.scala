@@ -58,6 +58,7 @@ class TaskMetaBean(val underlying: Map[String, Any]) extends ConfigMetaBean {
 object StreamStatus {
   val NORMAL = "NORMAL"
   val REMOVE = "REMOVE"
+  val CRON_COMPLETE = "CRON_COMPLETE"
   val FAILURE = "FAILURE"
   val COMPLETE = "COMPLETE"
 }

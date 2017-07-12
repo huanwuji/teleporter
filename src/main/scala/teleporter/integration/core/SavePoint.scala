@@ -40,7 +40,7 @@ trait RecoverStreamStatus extends Logging {
     import center.system.dispatcher
     val context = center.context.getContext[StreamContext](key)
     val streamMetaBean = context.config
-    if (StreamStatus.FAILURE eq streamMetaBean.status) {
+    if (StreamStatus.NORMAL ne streamMetaBean.status) {
       logger.info(s"Will recover $key status to Normal")
       val targetStreamConfig = streamMetaBean.status(StreamStatus.NORMAL)
       center.brokerConnection.future.flatMap(_.handler.request(MessageType.AtomicSaveKV,

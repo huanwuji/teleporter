@@ -35,7 +35,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
     .maximumSize(100)
     .build[String, StreamLogic]()
   private val streamStates = TrieMap[String, StreamState]()
-  private val cronCache = mutable.Map[Any, UUID]()
+  private val cronCache = mutable.Map[String, UUID]()
 
   @scala.throws[Exception](classOf[Exception])
   override def preStart(): Unit = {
@@ -52,23 +52,19 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
         case _ ⇒
       }
     case CronCommand(command, cron) ⇒
-      cronCache.remove(command).foreach {
-        jobId ⇒
-          logger.info(s"Cancel exists cron job, $command, $jobId")
-          center.crontab ! UnSchedule(jobId)
-      }
+      cleanCron(command.key)
       logger.info(s"Schedule new job, $command")
       center.crontab ! CronTab.Schedule(self, CronScheduleCommand(command, cron), CronExpression(cron))
     case CronScheduleCommand(command, _) ⇒
       command match {
         case Start(key) ⇒ start(key, allowCron = false)
         case Stop(key) ⇒ stop(key)
-        case Remove(key) ⇒ stop(key)
+        case Remove(key) ⇒ remove(key)
         case Restart(key) ⇒ restart(key)
       }
-    case cronSchedule@CronTab.Scheduled(jobId, _, message) ⇒
+    case cronSchedule@CronTab.Scheduled(jobId, _, message: CronScheduleCommand) ⇒
       logger.info(s"CronSchedule $cronSchedule was start")
-      cronCache += (message → jobId)
+      cronCache += (message.command.key → jobId)
     case UnScheduled(jobId) ⇒
       logger.info(s"Cron job was cancel, $jobId")
   }
@@ -76,7 +72,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
   def command: Receive = {
     case Start(key) ⇒ start(key)
     case Stop(key) ⇒ stop(key)
-    case Remove(key) ⇒ stop(key)
+    case Remove(key) ⇒ remove(key)
     case Restart(key) ⇒ restart(key)
     case ExecuteStream(key, stream) ⇒ executeStream(key, stream)
   }
@@ -114,11 +110,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
   }
 
   def stop(key: String): Future[Done] = {
-    cronCache.remove(command).foreach {
-      jobId ⇒
-        logger.info(s"Cancel exists cron job, $command, $jobId")
-        center.crontab ! UnSchedule(jobId)
-    }
+    cleanCron(key)
     streamStates.get(key) match {
       case Some(state) ⇒
         logger.info(s"Stream $key will shutdown")
@@ -126,6 +118,14 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
         killSwitch.shutdown()
         fu
       case None ⇒ Future.successful(Done)
+    }
+  }
+
+  def cleanCron(key: String): Unit = {
+    cronCache.remove(key).foreach {
+      jobId ⇒
+        logger.info(s"Cancel exists cron job, $command, $jobId")
+        center.crontab ! UnSchedule(jobId)
     }
   }
 
@@ -140,6 +140,7 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
             } catch {
               case e: Exception ⇒
                 logger.error(s"$key template load error, ${e.getMessage}", e)
+                stop(key)
                 throw e
             }
           }
@@ -153,9 +154,15 @@ class StreamsActor()(implicit center: TeleporterCenter) extends Actor with Loggi
     fu.andThen { case _ ⇒ center.context.unRegister(key) }
       .onComplete {
         case Success(v) ⇒
-          center.client.streamStatus(key, StreamStatus.COMPLETE)
-          logger.info(s"$key was completed, $v")
+          if (cronCache.contains(key)) {
+            center.client.streamStatus(key, StreamStatus.CRON_COMPLETE)
+            logger.info(s"$key cron was completed, $v")
+          } else {
+            center.client.streamStatus(key, StreamStatus.COMPLETE)
+            logger.info(s"$key was completed, $v")
+          }
         case Failure(e) ⇒
+          cleanCron(key)
           center.client.streamStatus(key, StreamStatus.FAILURE)
           center.context.getContext[StreamContext](key).decider.teleporterFailure(key, e)
           logger.warn(s"$key execute failed", e)
@@ -181,7 +188,9 @@ object Streams {
   type ReturnValues = (KillSwitch, Future[Done])
   type StreamLogic = (String, TeleporterCenter) ⇒ ReturnValues
 
-  sealed trait StreamCommand
+  sealed trait StreamCommand {
+    def key: String
+  }
 
   case class Start(key: String) extends StreamCommand
 
