@@ -397,7 +397,7 @@ abstract class CommonSinkAsyncUnordered[C, In, Out](name: String, parallelism: I
       }
 
       override def onUpstreamFinish(): Unit = {
-        if (todo == 0 && !isClosed(in)) closeAndThen(super.onUpstreamFinish)
+        if (todo == 0 && isClosed(in)) closeAndThen(super.onUpstreamFinish)
       }
 
       setHandlers(in, out, this)
