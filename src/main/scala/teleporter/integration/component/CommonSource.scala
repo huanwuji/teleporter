@@ -202,7 +202,7 @@ object SourceRoller {
       val begin = if (timeline.end == null) timeline.start else timeline.end
       val distance = java.time.Duration.between(begin, timeline.deadline()).toNanos
       val step = if (forever) {
-        (distance min timeline.maxPeriod.toNanos) min (distance max timeline.period.toNanos)
+        if (distance > timeline.maxPeriod.toNanos) timeline.maxPeriod.toNanos else timeline.period.toNanos
       } else {
         (distance min timeline.maxPeriod.toNanos) max (distance min timeline.period.toNanos)
       }
@@ -302,7 +302,7 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
 
   @tailrec
   final def foreverReadData(client: C): Option[Out] = {
-    val data = readData(client, currRollerContext)
+    val data = if (currRollerContext.isTimeNear) None else readData(client, currRollerContext)
     data match {
       case None ⇒
         currRollerContext.state match {
@@ -331,10 +331,10 @@ abstract class RollerSource[C, Out](name: String, rollerContext: RollerContext) 
                 }
             }
           case Timing ⇒
-            if (currRollerContext.isTimeOver) {
+            currRollerContext = currRollerContext.nextTimeline()
+            if (currRollerContext.isTimeNear) {
               None
             } else {
-              currRollerContext = currRollerContext.nextTimeline()
               foreverReadData(client)
             }
         }
@@ -598,7 +598,7 @@ abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContex
   }
 
   final def foreverReadData(client: C)(implicit executionContext: ExecutionContext): Future[Option[T]] = {
-    val data = readData(client, currRollerContext, executionContext)
+    val data = if (currRollerContext.isTimeNear) Future.successful(None) else readData(client, currRollerContext, executionContext)
     data.flatMap {
       case None ⇒
         currRollerContext.state match {
@@ -627,10 +627,10 @@ abstract class RollerSourceAsync[T, C](name: String, rollerContext: RollerContex
                 }
             }
           case Timing ⇒
-            if (currRollerContext.isTimeOver) {
+            currRollerContext = currRollerContext.nextTimeline()
+            if (currRollerContext.isTimeNear) {
               Future.successful(None)
             } else {
-              currRollerContext = currRollerContext.nextTimeline()
               foreverReadData(client)
             }
         }

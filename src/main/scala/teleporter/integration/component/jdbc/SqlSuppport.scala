@@ -100,7 +100,7 @@ trait SqlSupport extends Use {
   def updateSql(tableName: String, primaryKeys: Seq[String], version: Option[String] = None, data: Map[String, Any]): Sql = {
     val keys = data.keySet -- primaryKeys
     val keysFilter = primaryKeys.map(keys ⇒ s"$keys=${paramsDefined(keys)}").mkString(" and ")
-    val versionSql = version.map(v ⇒ s"and $version<${paramsDefined(v)}")
+    val versionSql = version.map(v ⇒ s"and $version<${paramsDefined(v)}").getOrElse("")
     NameSql( s"""update $tableName set ${nameColumnsSet(keys)} where $keysFilter $versionSql""", data)
   }
 
